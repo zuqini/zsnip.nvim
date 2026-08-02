@@ -136,6 +136,28 @@ describe('the public surface', function()
     assert.are.same({ 'a' }, helpers.prefixes(zsnip.get()))
   end)
 
+  -- The registry hands out the list it caches, so an introspection call that
+  -- returned it directly would let a caller's sort or filter rewrite what
+  -- every later lookup sees.
+  it('hands out a list the caller can rearrange', function()
+    registry.add('lua', { { prefix = 'a', body = 'b' }, { prefix = 'c', body = 'b' } })
+
+    local snippets = zsnip.get('lua')
+    table.remove(snippets, 1)
+    assert.are.same({ 'a', 'c' }, helpers.prefixes(zsnip.get('lua')))
+
+    local available = zsnip.available()
+    table.remove(available.lua, 1)
+    assert.are.same({ 'a', 'c' }, helpers.prefixes(zsnip.available().lua))
+  end)
+
+  -- The list is a copy; the snippets in it are not, and deliberately so --
+  -- expand_snippet() takes an entry from here straight back.
+  it('shares the snippets themselves', function()
+    registry.add('lua', { { prefix = 'a', body = 'b' } })
+    assert.are.equal(zsnip.get('lua')[1], zsnip.get('lua')[1])
+  end)
+
   it('creates :ZSnip on setup', function()
     zsnip.setup()
     assert.is_not_nil(vim.api.nvim_get_commands({})['ZSnip'])

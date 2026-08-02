@@ -51,7 +51,7 @@ local function list()
   -- second :ZSnip list with the first still on screen would raise E95 out of
   -- nvim_buf_set_name -- after the window and its contents already exist.
   local previous = vim.fn.bufnr('^zsnip://snippets$')
-  if previous ~= -1 then
+  if previous ~= -1 and vim.bo[previous].buftype == 'nofile' then
     vim.api.nvim_buf_delete(previous, { force = true })
   end
 

@@ -24,24 +24,23 @@ function M.read_json(path)
   return (ok and type(decoded) == 'table') and decoded or nil
 end
 
----A body or description as one string. Non-string elements are dropped rather
----than concatenated: JSON arrays come from other people's packs, and a `null`
----(userdata, once decoded) or a nested object raises out of table.concat --
----which would take down every snippet for that filetype, from inside whatever
----asked for them.
----@param value string|string[]|nil
+---A body or description as one string. Anything that is not a string or a
+---number is dropped rather than concatenated: JSON arrays come from other
+---people's packs, and a `null` (userdata, once decoded) or a nested object
+---raises out of table.concat -- which would take down every snippet for that
+---filetype, from inside whatever asked for them. An array that yields nothing
+---usable is nil, not '': an empty body is a menu entry that inserts nothing.
+---@param value string|number|(string|number)[]|nil
 ---@return string?
 function M.joined(value)
   if type(value) == 'table' then
     local strings = {}
     for _, element in ipairs(value) do
-      if type(element) == 'string' then
-        strings[#strings + 1] = element
-      elseif type(element) == 'number' then
+      if type(element) == 'string' or type(element) == 'number' then
         strings[#strings + 1] = tostring(element)
       end
     end
-    return table.concat(strings, '\n')
+    return #strings > 0 and table.concat(strings, '\n') or nil
   elseif type(value) == 'string' then
     return value
   end
