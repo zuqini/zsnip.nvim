@@ -1,4 +1,4 @@
----zsnip.nvim -- snippet collections for Neovim's built-in snippet engine.
+---ZSnip.nvim -- snippet collections for Neovim's built-in snippet engine.
 ---
 ---Neovim ships |vim.snippet|, which expands an LSP snippet body and runs the
 ---session. What it does not ship is everything around that: finding the

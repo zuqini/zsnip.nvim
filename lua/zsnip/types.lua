@@ -1,4 +1,4 @@
----Type declarations for zsnip.nvim.
+---Type declarations for ZSnip.nvim.
 ---
 ---Loaded for its annotations only; the module itself is empty.
 

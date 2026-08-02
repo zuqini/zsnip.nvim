@@ -1,4 +1,4 @@
-# zsnip.nvim Test Suite
+# ZSnip.nvim Test Suite
 
 The suite runs under [busted](https://lunarmodules.github.io/busted/). Because
 the tests exercise real Neovim APIs (`vim.snippet`, `vim.api`, the
