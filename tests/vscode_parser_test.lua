@@ -94,6 +94,36 @@ describe('vscode.contributions', function()
     end, entries))
   end)
 
+  -- The JSON is well-formed; the values in it are not. table.concat raises on
+  -- a decoded null, a nested object or a boolean, and nothing upstream catches
+  -- it -- so one bad entry would take down every snippet for that filetype,
+  -- from inside whatever asked for them.
+  it('drops junk inside a body array instead of raising', function()
+    local dir = helpers.vscode_raw_pack(
+      'lua',
+      [[{
+        "good":   { "prefix": "good",   "body": ["a", "b"] },
+        "null":   { "prefix": "null",   "body": ["a", null, "b"] },
+        "nested": { "prefix": "nested", "body": ["a", { "k": 1 }] },
+        "bool":   { "prefix": "bool",   "body": ["a", true] },
+        "number": { "prefix": "number", "body": ["a", 2] },
+        "desc":   { "prefix": "desc",   "body": "x", "description": [null] }
+      }]]
+    )
+    local snippets = vscode.parse(dir .. '/snippets/lua.json')
+    local bodies = {}
+    for _, snippet in ipairs(snippets) do
+      bodies[snippet.prefix] = snippet.body
+    end
+
+    assert.are.equal('a\nb', bodies.good)
+    assert.are.equal('a\nb', bodies['null'])
+    assert.are.equal('a', bodies.nested)
+    assert.are.equal('a', bodies.bool)
+    assert.are.equal('a\n2', bodies.number)
+    assert.are.equal('x', bodies.desc)
+  end)
+
   it('ignores every plugin package.json that is not a snippet pack', function()
     assert.are.same({}, vscode.contributions(package_json({ name = 'some-plugin' })))
     assert.are.same({}, vscode.contributions(package_json({ contributes = { snippets = 'x' } })))
