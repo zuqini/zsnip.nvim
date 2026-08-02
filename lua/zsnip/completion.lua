@@ -31,10 +31,12 @@ local function item(snippet, text, filetype)
   }
 end
 
----What a source forwards, in one place so that a new `zsnip.SourceOpts` field
----does not have to be re-plumbed through all three of them. The uncapped
----default is theirs alone: `max_items` exists for hand-rolled callers, and an
----engine that filters and ranks the response wants the whole filetype.
+---What `zsnip.blink`, `zsnip.cmp` and `zsnip.lsp` forward, in one place so that
+---a new `zsnip.SourceOpts` field does not have to be re-plumbed through all
+---three. The uncapped default belongs to them alone, because an engine that
+---filters and ranks the response wants the whole filetype. `max_items` is for
+---hand-rolled callers and for `zsnip.complete`, which does not come through
+---here: it matches for itself, and nothing downstream trims what it returns.
 ---@param opts zsnip.SourceOpts
 ---@param bufnr? integer
 ---@return zsnip.CompletionOpts

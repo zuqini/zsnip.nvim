@@ -245,8 +245,9 @@ vim.keymap.set({ 'i', 's' }, '<C-j>', function() require('zsnip').jump(-1) end)
 require('zsnip').setup({
   extend = {},              -- filetype -> filetypes it inherits from
   global_filetype = 'all',  -- bucket every filetype inherits; false to disable
-  max_items = 100,          -- default cap for completion_items(); the built-in
-                            -- sources ask for an uncapped list and filter it
+  max_items = 100,          -- default cap for completion_items() and for
+                            -- zsnip.complete; blink/cmp/lsp ask for an
+                            -- uncapped list and let their engine filter it
   documentation = true,     -- attach the body as item documentation
   command = true,           -- create :ZSnip
 })

@@ -80,9 +80,9 @@ Optional -- every default works without it. Stores options and creates
     require('zsnip').setup({
       extend = {},              -- filetype -> filetypes it inherits from
       global_filetype = 'all',  -- bucket every filetype inherits; false to disable
-      max_items = 100,          -- default cap for completion_items(); the
-                                -- built-in sources ask for an uncapped
-                                -- list and filter it themselves
+      max_items = 100,          -- default cap for completion_items() and
+                                -- for zsnip.complete; blink/cmp/lsp ask
+                                -- for an uncapped list and filter it
       documentation = true,     -- attach the body as item documentation
       command = true,           -- create :ZSnip
     })

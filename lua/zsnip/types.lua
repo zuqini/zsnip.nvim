@@ -25,7 +25,7 @@
 ---@class zsnip.Config
 ---@field extend? table<string, string|string[]> Filetype inheritance, e.g. `{ typescriptreact = { 'typescript' } }`
 ---@field global_filetype? string|false Bucket every filetype inherits from (default `'all'`)
----@field max_items? integer Default cap for |zsnip.completion_items()| (default 100)
+---@field max_items? integer Default cap for |zsnip.completion_items()| and `zsnip.complete` (default 100)
 ---@field documentation? boolean Attach the snippet body as item documentation (default true)
 ---@field command? boolean Create the `:ZSnip` user command (default true)
 

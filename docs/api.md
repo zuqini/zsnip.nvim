@@ -11,7 +11,7 @@ requires `setup()` to have run — it only stores options and creates `:ZSnip`.
 | --- | --- | --- | --- |
 | `extend` | `table<string, string\|string[]>` | `{}` | Filetype inheritance |
 | `global_filetype` | `string\|false` | `'all'` | Bucket every filetype inherits from |
-| `max_items` | `integer` | `100` | Default cap for `completion_items()`. The three built-in sources ask for an uncapped list so their engine can filter it, so this applies only to your own calls |
+| `max_items` | `integer` | `100` | Default cap for `completion_items()` and for `zsnip.complete`. The `blink`, `cmp` and `lsp` sources ask for an uncapped list, since the engine behind them filters and ranks it; `zsnip.complete` matches for itself and hands the result straight to the menu, so it is bounded by this |
 | `documentation` | `boolean` | `true` | Attach the body as item documentation |
 | `command` | `boolean` | `true` | Create the [`:ZSnip`](#the-zsnip-command) command |
 
