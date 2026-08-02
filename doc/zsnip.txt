@@ -139,8 +139,12 @@ config can shadow a pack.
 ==============================================================================
 7. COMPLETION                                                *zsnip-completion*
 
-Three ways to offer the snippets. Pick one -- a native source for your engine,
-or the LSP server. Running both offers every snippet twice.
+Four ways to offer the snippets. Pick one -- a native source for your engine,
+the in-process LSP server, or Neovim's own completion. Running two offers
+every snippet twice.
+
+Only the last two need no completion plugin, and |zsnip.complete| needs no LSP
+client either.
 
                                                                  *zsnip.blink*
 blink.cmp~
@@ -184,6 +188,15 @@ Options:
     documentation       boolean   Attach the body as item documentation
     filter              fun       Keep only the snippets it returns true for
     trigger_characters  string[]  Characters that make a client ask unprompted
+    completion          boolean|table  Wire each attached buffer up for
+                                  |vim.lsp.completion|; a table is forwarded
+                                  to its enable()
+
+`completion` is what makes an accepted item expand. Attaching a client is not
+enough: the handler that reads `insertTextFormat` is installed only by
+vim.lsp.completion.enable(), so without it the items arrive and accepting one
+puts a literal `${1:mod}` in the buffer. It is applied to zsnip's own client
+only, never to your language servers.
 
 blink.cmp and nvim-cmp can receive the snippets this way too, through their
 existing LSP source, at the cost of no longer being able to configure snippets
@@ -199,14 +212,40 @@ firing a keystroke late and the second never firing at all.
       triggers[#triggers + 1] = string.char(byte)
     end
 
-    require('zsnip').start_lsp_server({ trigger_characters = triggers })
-
-    vim.api.nvim_create_autocmd('LspAttach', {
-      callback = function(args)
-        vim.lsp.completion.enable(true, args.data.client_id, args.buf, { autotrigger = true })
-      end,
+    require('zsnip').start_lsp_server({
+      trigger_characters = triggers,
+      completion = { autotrigger = true },
     })
 <
+                                                              *zsnip.complete*
+Neovim's built-in completion~
+>lua
+    require('zsnip.complete').enable()
+
+    vim.o.autocomplete = true      -- optional; CTRL-N reaches it either way
+    vim.o.completeopt = 'menu,popup,noinsert'
+<
+A function source in 'complete', so snippets rank next to buffer words in one
+menu and 'autocomplete' drives them as you type. Needs Neovim 0.12, where
+'complete' gained a function source. No completion plugin and no LSP client:
+enable() appends one entry to 'complete' and installs a |CompleteDone| handler.
+
+Each source can be capped on its own: >vim
+    set complete=.^5,w,Fv:lua.require'zsnip.complete'.completefunc^10
+<
+enable() takes the same `limit`, `documentation` and `filter` as the other
+sources, and disable() undoes both halves. It deliberately leaves
+'autocomplete' alone -- whether the menu opens by itself is your decision.
+
+Two things are specific to this path. zsnip does the matching, returning
+`refresh = "always"` so it is re-asked on every change; add `fuzzy` to
+'completeopt' if you want Vim's own narrowing to agree with zsnip's. And zsnip
+does the expanding, since nothing else here knows what a snippet body is -- the
+range it replaces is the whole non-blank run before the cursor, because a third
+of real triggers mix words and symbols (`console.log`, `<div`,
+`#!/usr/bin/env`). A trigger typed after a bracket still works: `(req` keeps
+the `(` and expands `req`.
+
                                                      *zsnip.completion_items()*
 zsnip.completion_items({opts})
 
@@ -304,12 +343,17 @@ available, which loaders are registered, and how many snippets were actually
 found.
 
 The last section, "Completion sources", answers the other half of "why do I
-see no snippets": a snippet that was found still has to reach a menu. It
-reports whether |zsnip.start_lsp_server()| has been called, and whether a
-client is actually running -- a `filetypes` list that excluded every buffer,
-or a `:LspStop`, leaves the server registered but serving nothing. If you
-registered a native source (`zsnip.blink` or `zsnip.cmp`) instead, no LSP
-server is the correct state.
+see no snippets": a snippet that was found still has to reach a menu.
+
+Two of the four wirings can be detected: the in-process LSP server, and
+|zsnip.complete|. For the server it reports whether a client is actually
+running, not merely that start_lsp_server() was called -- a `filetypes` list
+that excluded every buffer, or a `:LspStop`, leaves it registered and serving
+nothing. It also warns when both are on, which offers every snippet twice.
+
+A blink.cmp or nvim-cmp source is registered inside an engine that need not be
+loaded when the check runs, so "no source detected" is the correct result when
+you use one of those.
 
 ==============================================================================
 11. COMING FROM LUASNIP                                         *zsnip-luasnip*

@@ -1,13 +1,18 @@
 # Integrations
 
-zsnip offers snippets three ways. Pick **one** — a native source for your
-engine, or the LSP server. Running both offers every snippet twice.
+zsnip offers snippets four ways. Pick **one** — a native source for your
+engine, the LSP server, or Neovim's own completion. Running two offers every
+snippet twice.
 
 | | Use when | Trade-off |
 | --- | --- | --- |
 | `zsnip.blink` | You use blink.cmp | Snippets stay their own provider, so blink's `score_offset`, `min_keyword_length` and kind styling apply to them |
 | `zsnip.cmp` | You use nvim-cmp | Same, for nvim-cmp's source config |
-| `zsnip.start_lsp_server()` | Anything else, or nothing at all | One call covers every LSP-speaking menu, but the items arrive folded in with your language servers' |
+| `zsnip.complete` | You want no completion plugin at all | Nothing to install and nothing to start, and `'complete'` caps each source separately — but zsnip has to match and expand for itself, so it is the one path with its own code on the accept |
+| `zsnip.start_lsp_server()` | Anything else | One call covers every LSP-speaking menu, but the items arrive folded in with your language servers' |
+
+The last two need no completion plugin, and `zsnip.complete` needs no LSP
+client either. Both require Neovim 0.12.
 
 ## blink.cmp
 
@@ -52,6 +57,45 @@ The `snippet.expand` line is what makes nvim-cmp use Neovim's engine rather
 than asking for LuaSnip. `register()` is the only thing that requires nvim-cmp,
 so the module loads fine on a config without it.
 
+## Neovim's built-in completion (`'complete'`)
+
+```lua
+require('zsnip.complete').enable()
+
+vim.o.autocomplete = true            -- optional; CTRL-N reaches it either way
+vim.o.completeopt = 'menu,popup,noinsert'
+```
+
+Needs Neovim 0.12, where `'complete'` gained a function source and
+`'autocomplete'` gained the ability to drive it as you type. No completion
+plugin, and unlike the LSP server, no LSP client either — `enable()` appends
+one entry to `'complete'` and installs a `CompleteDone` handler.
+
+Snippets then rank next to buffer words in a single menu, and each source can
+be capped on its own:
+
+```vim
+set complete=.^5,w,Fv:lua.require'zsnip.complete'.completefunc^10
+```
+
+`enable()` takes the same `limit`, `documentation` and `filter` as the other
+sources. It deliberately does not touch `'autocomplete'`: whether the menu
+opens by itself is your decision, not zsnip's.
+
+Two things are specific to this path:
+
+- **zsnip does the matching.** The other three hand the whole filetype over
+  and let the engine filter; here the completion function is given the text to
+  match and returns `{ refresh = 'always' }`, so it is re-asked on every
+  change and stays in control. That means the fuzzy match is zsnip's — add
+  `fuzzy` to `'completeopt'` if you want Vim's own narrowing to agree with it.
+- **zsnip does the expanding.** Nothing else on this path knows what a snippet
+  body is, so `enable()`'s `CompleteDone` handler replaces the accepted
+  trigger and calls `vim.snippet.expand()`. The range it replaces is the whole
+  non-blank run before the cursor, because a third of real triggers mix words
+  and symbols — `console.log`, `<div`, `#!/usr/bin/env`. A trigger typed after
+  a bracket still works: `(req` keeps the `(` and expands `req`.
+
 ## The LSP server
 
 ```lua
@@ -76,11 +120,32 @@ for byte = 33, 126 do
   triggers[#triggers + 1] = string.char(byte)
 end
 
-require('zsnip').start_lsp_server({ trigger_characters = triggers })
+require('zsnip').start_lsp_server({
+  trigger_characters = triggers,
+  completion = { autotrigger = true },
+})
+```
 
+`completion` is what makes an accepted item expand. Attaching a client is not
+enough: the handler that reads `insertTextFormat` lives in
+`vim.lsp.completion` and is installed only by its `enable()`, so without this
+the items arrive and accepting one puts a literal `${1:mod}` in your buffer.
+Pass `true` for the defaults, or a table forwarded to
+`vim.lsp.completion.enable()` — `autotrigger`, `convert`, `cmp`.
+
+It is applied to zsnip's own client only. Enabling it for every client, which
+a hand-written `LspAttach` hook does unless it checks, would take over
+completion for your language servers as a side effect of asking for snippets:
+
+```lua
+-- Equivalent to `completion = { autotrigger = true }`, and the check is the
+-- part that is easy to leave out.
 vim.api.nvim_create_autocmd('LspAttach', {
   callback = function(args)
-    vim.lsp.completion.enable(true, args.data.client_id, args.buf, { autotrigger = true })
+    local client = vim.lsp.get_client_by_id(args.data.client_id)
+    if client and client.name == 'zsnip' then
+      vim.lsp.completion.enable(true, client.id, args.buf, { autotrigger = true })
+    end
   end,
 })
 ```

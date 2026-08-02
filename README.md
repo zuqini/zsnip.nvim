@@ -59,9 +59,22 @@ What that leaves zsnip to do, it does completely:
   placeholder sitting on it lands in the buffer unreachable — and a body whose
   only tabstop is `$0` gets no session at all. zsnip renumbers it past the
   last real tabstop.
-- **Whichever menu you use.** A native source for blink.cmp and for nvim-cmp,
-  plus an in-process LSP server for everything else — including Neovim's own
-  `vim.lsp.completion`, with no completion plugin at all.
+- **Whichever menu you use — including none.** Four ways to serve the same
+  snippets, so the choice of completion engine is not also a choice of snippet
+  plugin:
+
+  | | What it is | Needs |
+  | --- | --- | --- |
+  | `zsnip.blink` | A native blink.cmp source | blink.cmp |
+  | `zsnip.cmp` | A native nvim-cmp source | nvim-cmp |
+  | `zsnip.lsp` | An **in-process LSP server** — answers `textDocument/completion` without ever leaving the process, so any menu that speaks LSP picks it up with no glue | nothing |
+  | `zsnip.complete` | A **`'complete'` function source**, so snippets rank next to buffer words in Neovim's own menu and `'autocomplete'` drives them | nothing |
+
+  The last two are the point: neither needs a completion plugin, and
+  `zsnip.complete` does not even need an LSP client. It is also the only one
+  that has to expand the accepted snippet itself — the other three hand an
+  `lsp.CompletionItem` to something that already knows what
+  `insertTextFormat = Snippet` means.
 
 ## Requirements
 
@@ -85,7 +98,7 @@ vim.pack.add({
     require('zsnip').setup()
     require('zsnip.loaders.from_vscode').lazy_load()
     require('zsnip.loaders.from_snipmate').lazy_load()
-    -- Then one of the three ways to offer them; see Wiring, below.
+    -- Then one of the four ways to offer them; see Wiring, below.
     require('zsnip').start_lsp_server()
   end,
 }
@@ -113,8 +126,7 @@ picked up the moment it arrives.
 
 ## Wiring it into a completion menu
 
-Pick **one** — a native source, or the LSP server. Both at once offers every
-snippet twice.
+Pick **one** of the four. Two at once offers every snippet twice.
 
 **blink.cmp**
 
@@ -139,8 +151,21 @@ require('cmp').setup({
 })
 ```
 
-**Anything else, including no completion plugin at all** — an in-process LSP
-server, which every LSP-speaking menu already knows how to consume:
+**Neovim's own completion, no plugin and no LSP client** — a `'complete'`
+function source (needs Neovim 0.12):
+
+```lua
+require('zsnip.complete').enable()
+
+vim.o.autocomplete = true            -- optional; CTRL-N reaches it either way
+vim.o.completeopt = 'menu,popup,noinsert'
+```
+
+Snippets then rank alongside buffer words in one menu, and `'complete'` can cap
+each source separately — `set complete=.^5,w,Fv:lua.require'zsnip.complete'.completefunc^10`.
+
+**Anything else** — an in-process LSP server, which every LSP-speaking menu
+already knows how to consume:
 
 ```lua
 -- vim.lsp.completion only asks on the characters a server names, and a
@@ -152,12 +177,12 @@ for byte = 33, 126 do
   triggers[#triggers + 1] = string.char(byte)
 end
 
-require('zsnip').start_lsp_server({ trigger_characters = triggers })
-
-vim.api.nvim_create_autocmd('LspAttach', {
-  callback = function(args)
-    vim.lsp.completion.enable(true, args.data.client_id, args.buf, { autotrigger = true })
-  end,
+require('zsnip').start_lsp_server({
+  trigger_characters = triggers,
+  -- Wires each buffer up for vim.lsp.completion, for zsnip's client only.
+  -- Without it the items arrive but nothing expands them: an accepted
+  -- snippet would put a literal `${1:mod}` in the buffer.
+  completion = { autotrigger = true },
 })
 ```
 
@@ -230,7 +255,8 @@ require('zsnip').setup({
 
 `:checkhealth zsnip` reports the engine, the registered loaders, how much was
 actually found, and whether anything is serving it — a snippet that was found
-still needs one of the three wirings below to reach a menu.
+still needs one of the four wirings below to reach a menu. It can see two of
+them (the LSP server and `zsnip.complete`) and warns if both are on at once.
 
 ## Coming from LuaSnip
 

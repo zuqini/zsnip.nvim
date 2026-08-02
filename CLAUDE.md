@@ -36,6 +36,9 @@ zsnip loads snippet collections and hands their bodies to Neovim's
 - `lsp.lua` — the in-process language server that serves them.
 - `blink.lua` / `cmp.lua` — native completion sources. Neither may `require`
   its engine at module scope: they must load on a config that does not have it.
+- `complete.lua` — a `'complete'` function source for Neovim's own completion.
+  The only source that matches and expands for itself; the other three hand an
+  `lsp.CompletionItem` to something that already knows what to do with it.
 - `commands.lua` — the `:ZSnip` user command.
 - `health.lua` — `:checkhealth zsnip` diagnostics.
 - `util.lua` — the shared filesystem seam: every read the parsers do goes

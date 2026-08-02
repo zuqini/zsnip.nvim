@@ -51,6 +51,7 @@ nvim -u NONE -l tests/busted.lua --shuffle
 
 | Spec | Covers |
 | --- | --- |
+| `complete_test.lua` | The `'complete'` function source: where a trigger starts, complete-items shape, and expanding what was accepted |
 | `body_test.lua` | Variable resolution, `${0:…}` renumbering, grammar validation, function bodies |
 | `vscode_parser_test.lua` | `package.json` manifests and VSCode snippet JSON, including malformed shapes |
 | `snipmate_parser_test.lua` | `.snippets` files: indentation, blank lines, `extends`, escaping |

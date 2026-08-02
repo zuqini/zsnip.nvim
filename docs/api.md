@@ -154,6 +154,12 @@ buffer that gets a filetype. Idempotent.
 | `documentation` | `boolean` | Attach the body as item documentation |
 | `filter` | `fun(snippet): boolean` | Keep only the snippets it returns true for |
 | `trigger_characters` | `string[]` | Characters that make a client ask unprompted (default: none) |
+| `completion` | `boolean\|table` | Wire each attached buffer up for `vim.lsp.completion`; a table is forwarded to its `enable()` |
+
+`completion` is what makes an accepted item expand — the handler that reads
+`insertTextFormat` is installed only by `vim.lsp.completion.enable()`, so
+without it accepting a snippet inserts a literal `${1:mod}`. It is applied to
+zsnip's own client only, never to your language servers.
 
 The whole filetype is returned in one uncut list (`isIncomplete = false`),
 which is what lets the client do its own filtering and ranking.
@@ -183,5 +189,24 @@ An nvim-cmp source. `require('zsnip.cmp').register(opts)` registers it under
 the name `zsnip`; `opts` are the same three. nvim-cmp is required by
 `register()` only, so the module loads without it.
 
-Use one of these *or* `start_lsp_server()`, not both — see
-[integrations](integrations.md).
+### `zsnip.complete`
+
+A source for Neovim's own insert-mode completion, through `'complete'`.
+Requires Neovim 0.12. Needs no completion plugin and no LSP client.
+
+| Function | Does |
+| --- | --- |
+| `require('zsnip.complete').enable(opts?)` | Append zsnip to `'complete'` and install the `CompleteDone` handler that expands what is accepted. Idempotent; `opts` are the same three |
+| `require('zsnip.complete').disable()` | Remove both again |
+| `require('zsnip.complete').completefunc(findstart, base)` | The raw [`complete-functions`](https://neovim.io/doc/user/insert.html#complete-functions) implementation, for putting in `'complete'` yourself |
+
+`enable()` does not set `'autocomplete'` — CTRL-N reaches the source either
+way, and whether the menu opens by itself is your decision.
+
+Unlike the other three sources this one matches (`{ refresh = 'always' }`, so
+zsnip is re-asked on every change) and expands (nothing else on this path
+knows what a snippet body is) for itself. The replaced range is the whole
+non-blank run before the cursor, since real triggers mix words and symbols —
+`console.log`, `<div`, `#!/usr/bin/env`.
+
+Use exactly one of these four — see [integrations](integrations.md).
