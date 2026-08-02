@@ -24,9 +24,16 @@ describe('body.resolve', function()
   end)
 
   it('escapes snippet syntax coming out of a variable', function()
-    vim.fn.setreg('+', 'a $1 }')
-    assert.are.equal('a \\$1 \\}', body.resolve('$CLIPBOARD'))
-    vim.fn.setreg('+', '')
+    -- The register is stubbed rather than written to: a headless CI runner has
+    -- no clipboard provider, so '+' reads back empty there.
+    local getreg = vim.fn.getreg
+    vim.fn.getreg = function()
+      return { 'a $1 }' }
+    end
+    local resolved = body.resolve('$CLIPBOARD')
+    vim.fn.getreg = getreg
+
+    assert.are.equal('a \\$1 \\}', resolved)
   end)
 
   it('reads comment markers off the buffer', function()

@@ -8,6 +8,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      # Each version reports on its own: a failure on one must not cancel the
+      # others and hide whether they would have passed.
+      fail-fast: false
       matrix:
         neovim-version: ['v0.11.0', 'v0.12.0', 'nightly']
 
