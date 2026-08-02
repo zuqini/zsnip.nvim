@@ -1,0 +1,94 @@
+local body = require('zsnip.body')
+
+describe('body.resolve', function()
+  it('fills in variables Neovim does not know', function()
+    assert.are.equal(os.date('%Y'), body.resolve('$CURRENT_YEAR'))
+    assert.are.equal(os.date('%Y'), body.resolve('${CURRENT_YEAR}'))
+  end)
+
+  it('leaves unknown variables for the engine to handle', function()
+    assert.are.equal('$NAME', body.resolve('$NAME'))
+    assert.are.equal('$C$', body.resolve('$C$'))
+  end)
+
+  it('leaves escaped variables alone', function()
+    assert.are.equal('\\${CURRENT_YEAR}', body.resolve('\\${CURRENT_YEAR}'))
+  end)
+
+  it('leaves tabstops alone', function()
+    assert.are.equal('${1:name}$0', body.resolve('${1:name}$0'))
+  end)
+
+  it('produces a well-formed UUID', function()
+    assert.is_truthy(body.resolve('$UUID'):match('^%x%x%x%x%x%x%x%x%-%x%x%x%x%-4%x%x%x%-[89ab]%x%x%x%-%x+$'))
+  end)
+
+  it('escapes snippet syntax coming out of a variable', function()
+    vim.fn.setreg('+', 'a $1 }')
+    assert.are.equal('a \\$1 \\}', body.resolve('$CLIPBOARD'))
+    vim.fn.setreg('+', '')
+  end)
+
+  it('reads comment markers off the buffer', function()
+    local saved = vim.bo.commentstring
+
+    vim.bo.commentstring = '-- %s'
+    assert.are.equal('--', body.resolve('$LINE_COMMENT'))
+    -- A line-comment buffer has no honest answer for a block comment.
+    assert.are.equal('$BLOCK_COMMENT_START', body.resolve('$BLOCK_COMMENT_START'))
+
+    vim.bo.commentstring = '/* %s */'
+    assert.are.equal('/*', body.resolve('$BLOCK_COMMENT_START'))
+    assert.are.equal('*/', body.resolve('$BLOCK_COMMENT_END'))
+
+    vim.bo.commentstring = saved
+  end)
+
+  it('short-circuits a body with no variables', function()
+    assert.are.equal('plain text', body.resolve('plain text'))
+  end)
+end)
+
+describe('body.editable_final_tabstop', function()
+  it('renumbers a placeholder on the exit point past the last tabstop', function()
+    assert.are.equal('${1:a} ${2:b}', body.editable_final_tabstop('${1:a} ${0:b}'))
+  end)
+
+  it('counts tabstops written as transforms', function()
+    assert.are.equal('${3/x/y/} ${4:b}', body.editable_final_tabstop('${3/x/y/} ${0:b}'))
+  end)
+
+  it('leaves a bare $0 alone', function()
+    assert.are.equal('${1:a}$0', body.editable_final_tabstop('${1:a}$0'))
+  end)
+end)
+
+describe('body.expandable', function()
+  it('accepts what the grammar parses', function()
+    assert.is_true(body.expandable('local ${1:x} = $0'))
+  end)
+
+  it('rejects what it does not', function()
+    assert.is_false(body.expandable('${1:'))
+  end)
+end)
+
+describe('body.text', function()
+  it('calls a function body', function()
+    assert.are.equal('made', body.text({ prefix = 'x', body = function() return 'made' end }))
+  end)
+
+  it('drops a function body that raises', function()
+    assert.is_nil(body.text({ prefix = 'x', body = function() error('nope') end }))
+  end)
+
+  it('drops a function body that returns something unusable', function()
+    assert.is_nil(body.text({ prefix = 'x', body = function() return nil end }))
+    assert.is_nil(body.text({ prefix = 'x', body = function() return '${1:' end }))
+  end)
+
+  it('normalizes and resolves a function body', function()
+    local text = body.text({ prefix = 'x', body = function() return '${0:y} $CURRENT_YEAR' end })
+    assert.are.equal('${1:y} ' .. os.date('%Y'), text)
+  end)
+end)
