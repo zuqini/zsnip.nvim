@@ -15,8 +15,18 @@ local function lua_buffer(line)
   return bufnr
 end
 
-before_each(helpers.reset)
+-- Both helpers put the cursor after the last character, which is where it sits
+-- in insert mode -- the only mode this source and its CompleteDone handler ever
+-- run in. Normal mode clamps that column back one, which shortens the run under
+-- test and leaves the expansion computing a start one byte short of the trigger.
+local virtualedit
+before_each(function()
+  helpers.reset()
+  virtualedit = vim.o.virtualedit
+  vim.o.virtualedit = 'onemore'
+end)
 after_each(function()
+  vim.o.virtualedit = virtualedit
   complete.disable()
   vim.snippet.stop()
   helpers.cleanup()
