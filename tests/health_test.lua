@@ -85,13 +85,34 @@ describe(':checkhealth zsnip', function()
   -- Which of the three mutually exclusive delivery paths is running is the
   -- other half of "why do I see no snippets", and nothing else reports it.
   it('says whether the LSP server is serving them', function()
-    assert.is_true(mentions(check().info, 'LSP server not started'))
+    assert.is_true(mentions(check().info, 'No source detected'))
 
     local bufnr = vim.api.nvim_create_buf(false, true)
     vim.bo[bufnr].filetype = 'lua'
     require('zsnip.lsp').start()
-    assert.is_true(mentions(check().ok, 'LSP server started, and a client is running'))
+    assert.is_true(mentions(check().ok, 'serving: the in%-process LSP server'))
 
+    helpers.stop_lsp()
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it('sees the complete source too', function()
+    require('zsnip.complete').enable()
+    assert.is_true(mentions(check().ok, "serving: zsnip%.complete"))
+
+    require('zsnip.complete').disable()
+  end)
+
+  -- The docs say to pick one; nothing checked that you had.
+  it('warns when two sources are serving at once', function()
+    local bufnr = vim.api.nvim_create_buf(false, true)
+    vim.bo[bufnr].filetype = 'lua'
+    require('zsnip.lsp').start()
+    require('zsnip.complete').enable()
+
+    assert.is_true(mentions(check().warn, 'Two sources are serving'))
+
+    require('zsnip.complete').disable()
     helpers.stop_lsp()
     vim.api.nvim_buf_delete(bufnr, { force = true })
   end)

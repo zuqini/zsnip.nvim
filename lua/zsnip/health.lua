@@ -86,31 +86,52 @@ local function check_snippets()
   end
 end
 
----A found snippet still has to reach a menu, and the three ways of arranging
+---A found snippet still has to reach a menu, and the four ways of arranging
 ---that are mutually exclusive. Which one is running is the other half of "why
----do I see no snippets", and nothing else reports it.
+---do I see no snippets".
+---
+---Only two of them can be answered from here: a blink or nvim-cmp source is
+---registered inside an engine that need not even be loaded when this runs, so
+---their absence is never reported as a fault.
 local function check_sources()
   vim.health.start('Completion sources')
 
   local lsp = require('zsnip.lsp')
-  if not lsp.started() then
-    vim.health.info(table.concat({
-      'LSP server not started. That is correct if you registered a native',
-      'source instead (zsnip.blink or zsnip.cmp) — running both offers every',
-      'snippet twice. If you registered neither, nothing is serving them:',
-      "  require('zsnip').start_lsp_server()",
-    }, '\n'))
+  local serving = {}
+  if lsp.started() and lsp.running() then
+    serving[#serving + 1] = 'the in-process LSP server'
+  end
+  if require('zsnip.complete').enabled() then
+    serving[#serving + 1] = "zsnip.complete, through 'complete'"
+  end
+
+  if #serving > 1 then
+    vim.health.warn('Two sources are serving: ' .. table.concat(serving, ' and '), {
+      'Every snippet is offered twice. Pick one.',
+    })
     return
   end
 
-  if lsp.running() then
-    vim.health.ok('LSP server started, and a client is running')
+  if #serving == 1 then
+    vim.health.ok('serving: ' .. serving[1])
     return
   end
-  vim.health.warn('LSP server started, but no client is running', {
-    'Nothing is serving snippets right now. Either every buffer opened so far',
-    'was excluded by the `filetypes` option, or the client was stopped.',
-  })
+
+  if lsp.started() then
+    vim.health.warn('LSP server started, but no client is running', {
+      'Either every buffer opened so far was excluded by the `filetypes`',
+      'option, or the client was stopped.',
+    })
+    return
+  end
+
+  vim.health.info(table.concat({
+    'No source detected. That is correct if you registered a native one',
+    '(zsnip.blink or zsnip.cmp) — those live inside a completion engine and',
+    'cannot be seen from here. If you registered none of the four, nothing is',
+    'serving the snippets. The one that needs no plugin at all:',
+    "  require('zsnip.complete').enable()",
+  }, '\n'))
 end
 
 local function check_bug_report()
