@@ -54,17 +54,31 @@ function M.filetype_extend(filetype, inherits)
   registry.extend(filetype, inherits)
 end
 
+---The registry hands out the list it caches. Callers of a public
+---introspection call sort and filter what they are given, so they get a copy
+---of the list -- the snippets in it are still shared, and deliberately: an
+---entry from here is what |zsnip.expand_snippet()| expects back.
+---@param snippets zsnip.Snippet[]
+---@return zsnip.Snippet[]
+local function copy(snippets)
+  return vim.list_extend({}, snippets)
+end
+
 ---Every snippet available to a filetype, in shadowing order.
 ---@param filetype? string Defaults to the current buffer's
 ---@return zsnip.Snippet[]
 function M.get(filetype)
-  return registry.get(filetype or vim.bo.filetype)
+  return copy(registry.get(filetype or vim.bo.filetype))
 end
 
 ---Every filetype zsnip knows snippets for, mapped to them.
 ---@return table<string, zsnip.Snippet[]>
 function M.available()
-  return registry.available()
+  local available = {}
+  for filetype, snippets in pairs(registry.available()) do
+    available[filetype] = copy(snippets)
+  end
+  return available
 end
 
 ---Snippets as LSP completion items, for a hand-rolled completion source.
