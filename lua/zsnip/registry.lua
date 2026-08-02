@@ -22,15 +22,22 @@ local M = {}
 ---@field extend table<string, string[]> Inheritance declared through the API or setup()
 ---@field inherited table<string, string[]> Inheritance declared by `extends` lines in snipmate files
 ---@field sources table<string, zsnip.Source[]>? Discovered files per language; nil until scanned
----@field parsed table<string, zsnip.Snippet[]> Parse results per file path
+---@field read table<string, zsnip.ParsedFile> Parser output per file path
+---@field parsed table<string, zsnip.Snippet[]> Normalized snippets per file path *and language*
 ---@field cache table<string, zsnip.Snippet[]>
 ---@field scanned_rtp string?
+---@field generation integer `config.generation` the cache was resolved under
 local state
+
+---@class zsnip.ParsedFile
+---@field snippets zsnip.Snippet[]
+---@field extends string[]
 
 ---Drop everything derived from the filesystem. Kept separate from clear() so
 ---`:ZSnip reload` does not throw away snippets added from a user's config.
 function M.invalidate()
   state.sources = nil
+  state.read = {}
   state.parsed = {}
   state.cache = {}
   state.inherited = {}
@@ -45,9 +52,11 @@ function M.clear()
     extend = {},
     inherited = {},
     sources = nil,
+    read = {},
     parsed = {},
     cache = {},
     scanned_rtp = nil,
+    generation = config.generation,
   }
 end
 
@@ -150,6 +159,15 @@ end
 ---does not fire for 'runtimepath', so there is nothing to hook. Reading and
 ---comparing the option costs ~0.1us.
 local function ensure_scanned()
+  -- `extend` and `global_filetype` are resolved into the per-filetype cache,
+  -- so a setup() that lands after the first lookup -- the ordinary case under
+  -- a lazy plugin manager -- has to invalidate it. Silently serving the old
+  -- answer is the worst of the options.
+  if state.generation ~= config.generation then
+    state.generation = config.generation
+    state.cache = {}
+  end
+
   local rtp = vim.o.runtimepath
   if state.sources and state.scanned_rtp == rtp then
     return
@@ -165,31 +183,54 @@ local function ensure_scanned()
 
   state.sources = sources
   state.scanned_rtp = rtp
+  state.read = {}
   state.parsed = {}
   state.cache = {}
   state.inherited = {}
 end
 
+---Reading and decoding a file, which depends on nothing but its path.
+---@param source zsnip.Source
+---@return zsnip.ParsedFile
+local function read(source)
+  local cached = state.read[source.path]
+  if cached then
+    return cached
+  end
+
+  local file
+  if source.kind == 'snipmate' then
+    local snippets, extends = PARSERS.snipmate.parse(source.path)
+    file = { snippets = snippets, extends = extends }
+  else
+    file = { snippets = PARSERS.vscode.parse(source.path), extends = {} }
+  end
+
+  state.read[source.path] = file
+  return file
+end
+
+---Normalizing that file's snippets *for one language*. Cached per path **and**
+---language, not per path alone: normalize() stamps the language onto every
+---snippet, and one VSCode file routinely covers several -- friendly-snippets'
+---`global.json` serves six. Keyed on the path alone, whichever filetype was
+---opened first stamps its name onto all of them.
 ---@param source zsnip.Source
 ---@param language string
 ---@return zsnip.Snippet[]
 local function parse(source, language)
-  if state.parsed[source.path] then
-    return state.parsed[source.path]
+  local key = source.path .. '\0' .. language
+  if state.parsed[key] then
+    return state.parsed[key]
   end
 
-  local snippets, extends
-  if source.kind == 'snipmate' then
-    snippets, extends = PARSERS.snipmate.parse(source.path)
-    if #extends > 0 then
-      state.inherited[language] = vim.list_extend(state.inherited[language] or {}, extends)
-    end
-  else
-    snippets = PARSERS.vscode.parse(source.path)
+  local file = read(source)
+  if #file.extends > 0 then
+    state.inherited[language] = vim.list_extend(state.inherited[language] or {}, file.extends)
   end
 
-  local normalized = normalize(snippets, language)
-  state.parsed[source.path] = normalized
+  local normalized = normalize(file.snippets, language)
+  state.parsed[key] = normalized
   return normalized
 end
 
@@ -205,9 +246,26 @@ local function parents(filetype)
   return list
 end
 
+---Every filter accumulates, so a second call adds to the first rather than
+---replacing it. Nil stays nil: a call that names no `include` is not a claim
+---that every language should now be included.
+---@param current string[]?
+---@param addition string[]?
+---@return string[]?
+local function accumulate(current, addition)
+  if not current or not addition then
+    return current or addition
+  end
+  local merged = {}
+  vim.list_extend(merged, current)
+  vim.list_extend(merged, addition)
+  return merged
+end
+
 ---Turn on a loader. Called by `zsnip.loaders.from_*`; repeated calls merge,
 ---so a second `lazy_load { paths = ... }` adds to the first rather than
----replacing it.
+---replacing it -- including its `include` and `exclude`, which would
+---otherwise make the languages named by the first call silently vanish.
 ---@param kind zsnip.LoaderKind
 ---@param opts? zsnip.LoaderOpts
 function M.enable(kind, opts)
@@ -218,8 +276,8 @@ function M.enable(kind, opts)
 
   state.loaders[kind] = {
     paths = paths,
-    include = opts.include or current.include,
-    exclude = opts.exclude or current.exclude,
+    include = accumulate(current.include, opts.include),
+    exclude = accumulate(current.exclude, opts.exclude),
   }
   M.invalidate()
 end

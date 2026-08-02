@@ -212,6 +212,106 @@ describe('registry normalization', function()
   end)
 end)
 
+describe('registry cache invalidation', function()
+  it('notices a setup() that lands after the first lookup', function()
+    registry.add('javascript', { { prefix = 'js', body = 'b' } })
+    registry.add('typescript', { { prefix = 'ts', body = 'b' } })
+    registry.add('all', { { prefix = 'global', body = 'b' } })
+
+    assert.are.same({ 'ts', 'global' }, helpers.prefixes(registry.get('typescript')))
+
+    require('zsnip.config').setup({
+      extend = { typescript = { 'javascript' } },
+      global_filetype = false,
+    })
+
+    assert.are.same({ 'ts', 'js' }, helpers.prefixes(registry.get('typescript')))
+  end)
+
+  it('notices a config reset just the same', function()
+    registry.add('lua', { { prefix = 'own', body = 'b' } })
+    registry.add('all', { { prefix = 'global', body = 'b' } })
+
+    require('zsnip.config').setup({ global_filetype = false })
+    assert.are.same({ 'own' }, helpers.prefixes(registry.get('lua')))
+
+    require('zsnip.config').reset()
+    assert.are.same({ 'own', 'global' }, helpers.prefixes(registry.get('lua')))
+  end)
+end)
+
+describe('registry.enable', function()
+  it('accumulates include across repeated calls rather than replacing it', function()
+    helpers.use_rtp(helpers.vscode_pack({
+      lua = { a = { prefix = 'lua_snip', body = 'b' } },
+      python = { a = { prefix = 'py_snip', body = 'b' } },
+      ruby = { a = { prefix = 'rb_snip', body = 'b' } },
+    }))
+    local loader = require('zsnip.loaders.from_vscode')
+
+    loader.lazy_load({ include = { 'lua' } })
+    loader.lazy_load({ include = { 'python' } })
+
+    assert.are.same({ 'lua_snip' }, helpers.prefixes(registry.get('lua')))
+    assert.are.same({ 'py_snip' }, helpers.prefixes(registry.get('python')))
+    assert.are.same({}, helpers.prefixes(registry.get('ruby')))
+  end)
+
+  it('accumulates exclude the same way', function()
+    helpers.use_rtp(helpers.vscode_pack({
+      lua = { a = { prefix = 'lua_snip', body = 'b' } },
+      python = { a = { prefix = 'py_snip', body = 'b' } },
+      ruby = { a = { prefix = 'rb_snip', body = 'b' } },
+    }))
+    local loader = require('zsnip.loaders.from_vscode')
+
+    loader.lazy_load({ exclude = { 'lua' } })
+    loader.lazy_load({ exclude = { 'python' } })
+
+    assert.are.same({}, helpers.prefixes(registry.get('lua')))
+    assert.are.same({}, helpers.prefixes(registry.get('python')))
+    assert.are.same({ 'rb_snip' }, helpers.prefixes(registry.get('ruby')))
+  end)
+
+  it('does not read a nil include as "everything from now on"', function()
+    helpers.use_rtp(helpers.vscode_pack({
+      lua = { a = { prefix = 'lua_snip', body = 'b' } },
+      python = { a = { prefix = 'py_snip', body = 'b' } },
+    }))
+    local loader = require('zsnip.loaders.from_vscode')
+
+    loader.lazy_load({ include = { 'lua' } })
+    loader.lazy_load({ paths = helpers.tempdir() })
+
+    assert.are.same({}, helpers.prefixes(registry.get('python')))
+  end)
+end)
+
+describe('registry parse caching', function()
+  -- friendly-snippets contributes one file to several languages 19 times over;
+  -- `global.json` alone covers six. Cached by path alone, whichever filetype
+  -- was looked up first stamps its name onto every copy.
+  it('stamps each language onto its own copy of a shared file', function()
+    helpers.use_rtp(helpers.vscode_shared_pack({ 'javascript', 'typescript' }, {
+      log = { prefix = 'log', body = 'console.log($1)' },
+    }))
+    require('zsnip.loaders.from_vscode').lazy_load()
+
+    assert.are.equal('typescript', registry.get('typescript')[1].filetype)
+    assert.are.equal('javascript', registry.get('javascript')[1].filetype)
+  end)
+
+  it('gives the same answer whichever language is asked for first', function()
+    helpers.use_rtp(helpers.vscode_shared_pack({ 'javascript', 'typescript' }, {
+      log = { prefix = 'log', body = 'console.log($1)' },
+    }))
+    require('zsnip.loaders.from_vscode').lazy_load()
+
+    assert.are.equal('javascript', registry.get('javascript')[1].filetype)
+    assert.are.equal('typescript', registry.get('typescript')[1].filetype)
+  end)
+end)
+
 describe('registry.reload', function()
   it('forgets files but keeps snippets added from Lua', function()
     helpers.use_rtp(helpers.vscode_pack({ lua = { packed = { prefix = 'packed', body = 'b' } } }))
