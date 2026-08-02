@@ -47,13 +47,21 @@ local function list()
       :format(snippet.prefix, snippet.filetype or '', snippet.description or '')
   end
 
+  -- `bufhidden = wipe` only reclaims the name once the buffer is hidden, so a
+  -- second :ZSnip list with the first still on screen would raise E95 out of
+  -- nvim_buf_set_name -- after the window and its contents already exist.
+  local previous = vim.fn.bufnr('^zsnip://snippets$')
+  if previous ~= -1 then
+    vim.api.nvim_buf_delete(previous, { force = true })
+  end
+
   vim.cmd('new')
   local bufnr = vim.api.nvim_get_current_buf()
+  vim.api.nvim_buf_set_name(bufnr, 'zsnip://snippets')
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
   vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = bufnr })
   vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
-  vim.api.nvim_buf_set_name(bufnr, 'zsnip://snippets')
 end
 
 local function reload()
