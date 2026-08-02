@@ -68,11 +68,49 @@ describe('completion.items', function()
     assert.is_falsy(vim.tbl_contains(matched, 'unrelated'))
   end)
 
-  it('orders items with sortText so a client keeps the ranking', function()
+  it('orders items with sortText when it ranked them itself', function()
+    registry.add('lua', { { prefix = 'fn', body = 'b' }, { prefix = 'function', body = 'b' } })
+    local items = completion.items({ filetype = 'lua', prefix = 'fn' })
+    assert.are.equal('000000', items[1].sortText)
+    assert.are.equal('000001', items[2].sortText)
+  end)
+
+  it('leaves sortText unset when it did no ranking, so the client can rank', function()
     registry.add('lua', { { prefix = 'a', body = 'b' }, { prefix = 'c', body = 'b' } })
+    for _, item in ipairs(completion.items({ filetype = 'lua' })) do
+      assert.is_nil(item.sortText)
+    end
+  end)
+
+  -- math.huge is what every built-in source passes for "no cap", and
+  -- matchfuzzy rejects a non-finite limit outright.
+  it('fuzzy-matches under an uncapped limit', function()
+    registry.add('lua', { { prefix = 'fn', body = 'b' }, { prefix = 'other', body = 'b' } })
+    local items = completion.items({ filetype = 'lua', prefix = 'fn', limit = math.huge })
+    assert.are.same({ 'fn' }, labels(items))
+  end)
+
+  -- Resolving is per-body work; the values are not. $CLIPBOARD is a round trip
+  -- to the clipboard provider, and one per snippet lands on the UI thread.
+  it('resolves an expensive variable once for the whole response', function()
+    local snippets = {}
+    for index = 1, 10 do
+      snippets[index] = { prefix = ('p%02d'):format(index), body = '$CLIPBOARD' }
+    end
+    registry.add('lua', snippets)
+
+    local getreg = vim.fn.getreg
+    local reads = 0
+    vim.fn.getreg = function()
+      reads = reads + 1
+      return { 'pasted' }
+    end
     local items = completion.items({ filetype = 'lua' })
-    assert.are.equal('0000', items[1].sortText)
-    assert.are.equal('0001', items[2].sortText)
+    vim.fn.getreg = getreg
+
+    assert.are.equal(10, #items)
+    assert.are.equal('pasted', items[1].insertText)
+    assert.are.equal(1, reads)
   end)
 
   it('caps the number of items', function()

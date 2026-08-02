@@ -56,9 +56,24 @@ function M.items(opts)
     end
   end
 
-  if opts.prefix and opts.prefix ~= '' then
-    triggers = vim.fn.matchfuzzy(triggers, opts.prefix, { limit = limit })
+  local ranked = opts.prefix ~= nil and opts.prefix ~= ''
+  if ranked then
+    -- matchfuzzy rejects a non-finite limit, and `math.huge` is what every
+    -- caller that wants no cap passes. Omitting the argument is not the same
+    -- as passing nil, which reaches Vimscript as v:null and raises E1206.
+    if limit == math.huge then
+      triggers = vim.fn.matchfuzzy(triggers, opts.prefix)
+    else
+      triggers = vim.fn.matchfuzzy(triggers, opts.prefix, { limit = limit })
+    end
   end
+
+  -- One cache for the whole batch. Resolving a body is per-item work, but the
+  -- values are not: `$CLIPBOARD` is a round trip to the clipboard provider,
+  -- and paying it once per snippet puts tens of milliseconds on the UI thread
+  -- for every keystroke that opens the menu.
+  ---@type zsnip.ResolveCache
+  local resolved = {}
 
   local items = {}
   for _, trigger in ipairs(triggers) do
@@ -66,15 +81,18 @@ function M.items(opts)
       break
     end
     local snippet = by_prefix[trigger]
-    local text = body.text(snippet)
+    local text = body.text(snippet, resolved)
     if text then
       local entry = item(snippet, text, filetype)
       if not documented then
         entry.detail, entry.documentation = nil, nil
       end
-      -- Matches are already in relevance order; sortText keeps a client from
-      -- re-sorting them alphabetically.
-      entry.sortText = ('%04d'):format(#items)
+      -- Only when zsnip did the ranking. Unranked, the order is the order the
+      -- packs happened to be read in, and pinning the client to that is what
+      -- stops it applying the ranking it is better at than we are.
+      if ranked then
+        entry.sortText = ('%06d'):format(#items)
+      end
       items[#items + 1] = entry
     end
   end
