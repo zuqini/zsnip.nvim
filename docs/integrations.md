@@ -72,11 +72,17 @@ plugin, and unlike the LSP server, no LSP client either — `enable()` appends
 one entry to `'complete'` and installs a `CompleteDone` handler.
 
 Snippets then rank next to buffer words in a single menu, and each source can
-be capped on its own:
+be capped on its own. Setting `'complete'` yourself means `enable()` should not
+also append to it, so pass `complete = false` and it installs only the
+`CompleteDone` handler:
 
-```vim
-set complete=.^5,w,Fv:lua.require'zsnip.complete'.completefunc^10
+```lua
+vim.o.complete = ".^5,w," .. require('zsnip.complete').source() .. '^10'
+require('zsnip.complete').enable({ complete = false })
 ```
+
+`enabled()` and `disable()` read the entry with or without its `^{count}`, so a
+capped setup is still recognised — by `:checkhealth zsnip` too.
 
 `enable()` takes the same `limit`, `documentation` and `filter` as the other
 sources. It deliberately does not touch `'autocomplete'`: whether the menu

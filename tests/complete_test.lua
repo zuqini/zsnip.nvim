@@ -122,6 +122,38 @@ describe('the complete source', function()
     complete.disable()
     assert.are.equal(before, #vim.opt.complete:get())
   end)
+
+  it('names the entry that goes in complete', function()
+    complete.enable()
+
+    assert.contains(vim.opt.complete:get(), complete.source())
+  end)
+
+  -- A cap belongs to the option value, not to the source. A config that sets
+  -- 'complete' itself writes `...completefunc^10`, and enable() has to read
+  -- that as already-there rather than appending a second, uncapped copy --
+  -- which offers every snippet twice.
+  it('recognises its entry through a match limit', function()
+    local before = #vim.opt.complete:get()
+    vim.opt.complete:append(complete.source() .. '^10')
+
+    assert.is_true(complete.enabled())
+
+    complete.enable()
+    assert.are.equal(before + 1, #vim.opt.complete:get())
+
+    complete.disable()
+    assert.are.equal(before, #vim.opt.complete:get())
+    assert.is_false(complete.enabled())
+  end)
+
+  it('leaves complete alone when the caller owns it', function()
+    local before = vim.o.complete
+
+    complete.enable({ complete = false })
+
+    assert.are.equal(before, vim.o.complete)
+  end)
 end)
 
 describe('the complete source expanding an accepted item', function()
@@ -182,5 +214,14 @@ describe('the complete source expanding an accepted item', function()
     accept('req', "require 'mod'")
 
     assert.are.same({ 'req' }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+  end)
+
+  -- The handler is the half a caller that owns 'complete' still needs.
+  it('expands for a caller that put the source in complete itself', function()
+    lua_buffer()
+    complete.enable({ complete = false })
+    accept('req', "require 'mod'")
+
+    assert.are.same({ "require 'mod'" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
   end)
 end)

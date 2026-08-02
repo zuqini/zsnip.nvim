@@ -230,9 +230,15 @@ menu and 'autocomplete' drives them as you type. Needs Neovim 0.12, where
 'complete' gained a function source. No completion plugin and no LSP client:
 enable() appends one entry to 'complete' and installs a |CompleteDone| handler.
 
-Each source can be capped on its own: >vim
-    set complete=.^5,w,Fv:lua.require'zsnip.complete'.completefunc^10
+Each source can be capped on its own. Setting 'complete' yourself means enable()
+should not append to it as well, so take the entry from source() and pass
+`complete = false` -- that installs only the |CompleteDone| handler: >lua
+    vim.o.complete = ".^5,w," .. require('zsnip.complete').source() .. '^10'
+    require('zsnip.complete').enable({ complete = false })
 <
+enabled() and disable() read the entry with or without its `^{count}`, so a
+capped setup is recognised rather than appended to twice.
+
 enable() takes the same `limit`, `documentation` and `filter` as the other
 sources, and disable() undoes both halves. It deliberately leaves
 'autocomplete' alone -- whether the menu opens by itself is your decision.

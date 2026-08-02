@@ -196,12 +196,19 @@ Requires Neovim 0.12. Needs no completion plugin and no LSP client.
 
 | Function | Does |
 | --- | --- |
-| `require('zsnip.complete').enable(opts?)` | Append zsnip to `'complete'` and install the `CompleteDone` handler that expands what is accepted. Idempotent; `opts` are the same three |
+| `require('zsnip.complete').enable(opts?)` | Append zsnip to `'complete'` and install the `CompleteDone` handler that expands what is accepted. Idempotent; `opts` are the same three, plus `complete = false` |
 | `require('zsnip.complete').disable()` | Remove both again |
+| `require('zsnip.complete').source()` | The entry to put in `'complete'` yourself; append `^{count}` to cap it |
 | `require('zsnip.complete').completefunc(findstart, base)` | The raw [`complete-functions`](https://neovim.io/doc/user/insert.html#complete-functions) implementation, for putting in `'complete'` yourself |
 
 `enable()` does not set `'autocomplete'` — CTRL-N reaches the source either
 way, and whether the menu opens by itself is your decision.
+
+If you set `'complete'` yourself — a config that owns the option, or one that
+caps the source — pair it with `enable({ complete = false })`, which installs
+the `CompleteDone` handler and leaves the option alone. `enabled()` and
+`disable()` recognise the entry with or without a `^{count}` cap, so a capped
+setup is neither appended to twice nor missed by `:checkhealth`.
 
 Unlike the other three sources this one matches (`{ refresh = 'always' }`, so
 zsnip is re-asked on every change) and expands (nothing else on this path

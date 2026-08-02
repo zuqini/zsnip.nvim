@@ -21,16 +21,29 @@ local completion = require('zsnip.completion')
 local M = {}
 
 ---@class zsnip.CompleteOpts : zsnip.SourceOpts
+---@field complete? boolean Add the source to 'complete' (default true). False when the caller sets the option itself.
 
 ---What goes in 'complete'. `v:lua` resolves the require at call time, so the
 ---option can be set before this module has loaded. No comma or space in it,
 ---which is what would otherwise need escaping in an option value.
 local SOURCE = [[Fv:lua.require'zsnip.complete'.completefunc]]
 
+---The same entry carrying a match limit.
+local CAPPED = '^' .. vim.pesc(SOURCE) .. '%^%d+$'
+
 local GROUP = 'zsnip.complete'
 
 ---@type zsnip.CompleteOpts
 local options = {}
+
+---An entry is this source whether or not it carries a `^{count}` cap: the cap
+---belongs to the option value, not to the source, so a caller that sets
+---'complete' itself is still running zsnip.
+---@param entry string
+---@return boolean
+local function is_source(entry)
+  return entry == SOURCE or entry:match(CAPPED) ~= nil
+end
 
 ---Where the run under the cursor starts, as a 0-based byte column.
 ---
@@ -126,6 +139,15 @@ local function expand()
   vim.snippet.expand(data.body)
 end
 
+---What to put in 'complete' to serve snippets, for a caller that sets the
+---option itself instead of letting `enable()` append. Append `^{count}` to cap
+---the source; see |'complete'|. Pair it with `enable({ complete = false })`,
+---which installs the |CompleteDone| handler without touching the option.
+---@return string
+function M.source()
+  return SOURCE
+end
+
 ---Add zsnip to 'complete' and expand what gets accepted from it. Idempotent.
 ---
 ---Does not touch 'autocomplete': whether the menu opens by itself is the
@@ -134,7 +156,7 @@ end
 function M.enable(opts)
   options = opts or {}
 
-  if not vim.tbl_contains(vim.opt.complete:get(), SOURCE) then
+  if options.complete ~= false and not M.enabled() then
     vim.opt.complete:append(SOURCE)
   end
 
@@ -147,12 +169,21 @@ end
 ---Whether zsnip is in 'complete' for the current buffer.
 ---@return boolean
 function M.enabled()
-  return vim.tbl_contains(vim.opt.complete:get(), SOURCE)
+  for _, entry in ipairs(vim.opt.complete:get()) do
+    if is_source(entry) then
+      return true
+    end
+  end
+  return false
 end
 
 ---Take zsnip back out of 'complete' and stop expanding.
 function M.disable()
-  vim.opt.complete:remove(SOURCE)
+  for _, entry in ipairs(vim.opt.complete:get()) do
+    if is_source(entry) then
+      vim.opt.complete:remove(entry)
+    end
+  end
   pcall(vim.api.nvim_del_augroup_by_name, GROUP)
 end
 

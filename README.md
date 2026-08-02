@@ -162,7 +162,14 @@ vim.o.completeopt = 'menu,popup,noinsert'
 ```
 
 Snippets then rank alongside buffer words in one menu, and `'complete'` can cap
-each source separately — `set complete=.^5,w,Fv:lua.require'zsnip.complete'.completefunc^10`.
+each source separately. If you set the option yourself, take the entry from
+`require('zsnip.complete').source()` and pass `complete = false` so `enable()`
+installs the `CompleteDone` handler without appending a second copy:
+
+```lua
+vim.o.complete = ".^5,w," .. require('zsnip.complete').source() .. '^10'
+require('zsnip.complete').enable({ complete = false })
+```
 
 **Anything else** — an in-process LSP server, which every LSP-speaking menu
 already knows how to consume:
