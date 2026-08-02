@@ -87,9 +87,68 @@ describe('the in-process server', function()
     vim.api.nvim_buf_delete(bufnr, { force = true })
   end)
 
+  it('forwards documentation and filter to the completion items', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' }, { prefix = 'skip', body = 'b' } })
+
+    local bufnr = vim.api.nvim_create_buf(false, false)
+    vim.api.nvim_buf_set_name(bufnr, helpers.tempdir() .. '/opts.lua')
+    vim.bo[bufnr].filetype = 'lua'
+    local params = {
+      textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+      position = { line = 0, character = 0 },
+    }
+
+    local plain = request(
+      start_server({
+        documentation = false,
+        filter = function(snippet)
+          return snippet.prefix ~= 'skip'
+        end,
+      }),
+      'textDocument/completion',
+      params
+    )
+
+    assert.are.equal(1, #plain.items)
+    assert.are.equal('req', plain.items[1].label)
+    assert.is_nil(plain.items[1].documentation)
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
   it('answers anything else with an empty result', function()
     assert.is_nil(request(start_server(), 'shutdown', {}))
     assert.is_nil(request(start_server(), 'textDocument/definition', {}))
+  end)
+
+  -- notify_reply is the only thing that clears the entry Client:request()
+  -- registers. Without it every completion leaves a 'pending' request behind
+  -- for the life of the session, and fires an LspRequest autocmd nothing ever
+  -- matches -- one per keystroke under autotrigger.
+  it('tells the client each reply is done', function()
+    local client = start_server()
+    local replied, ids = {}, {}
+
+    for _ = 1, 3 do
+      local ok, id = client.request('shutdown', {}, function(_, _, request_id)
+        ids[#ids + 1] = request_id
+      end, function(request_id)
+        replied[#replied + 1] = request_id
+      end)
+      assert.is_true(ok)
+      assert.is_number(id)
+    end
+
+    assert.are.same({ 1, 2, 3 }, replied)
+    assert.are.same({ 1, 2, 3 }, ids)
+  end)
+
+  it('still answers a client that offers no reply callback', function()
+    local client = start_server()
+    local ok, id = client.request('initialize', {}, function() end)
+
+    assert.is_true(ok)
+    assert.are.equal(1, id)
   end)
 
   it('reports exit and closing state', function()
@@ -98,8 +157,146 @@ describe('the in-process server', function()
     assert.is_false(client.is_closing())
     client.notify('exit')
     assert.are.equal(1, #exits)
+    assert.is_true(client.is_closing())
+  end)
+
+  -- A forced stop -- Client:stop(true), `:LspStop!`, a restart -- calls
+  -- terminate() instead of sending 'exit'. Reporting the exit is the only way
+  -- the client learns the server is gone; without it the user's on_exit
+  -- callback never runs and the client is never reaped.
+  it('reports an exit when it is terminated rather than asked to exit', function()
+    local client, exits = start_server()
 
     client.terminate()
+
     assert.is_true(client.is_closing())
+    assert.are.same({ { code = 0, signal = 15 } }, exits)
+  end)
+
+  it('reports that exit exactly once', function()
+    local client, exits = start_server()
+
+    client.terminate()
+    client.terminate()
+    client.notify('exit')
+
+    assert.are.equal(1, #exits)
+  end)
+end)
+
+describe('lsp.start', function()
+  after_each(helpers.stop_lsp)
+
+  ---@param filetype string
+  ---@return integer
+  local function buffer(filetype)
+    local bufnr = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(bufnr, helpers.tempdir() .. '/attach.' .. filetype)
+    vim.bo[bufnr].filetype = filetype
+    return bufnr
+  end
+
+  -- vim.lsp's client registry is global and outlives a busted test, and
+  -- vim.lsp.start() reuses by name. A name per test keeps these independent of
+  -- whatever the rest of the suite left behind; the *shipped* name is what the
+  -- default-name test below covers.
+  local counter = 0
+  ---@param opts? table
+  ---@return string name
+  local function start(opts)
+    counter = counter + 1
+    opts = vim.tbl_extend('force', opts or {}, { name = 'zsnip_start_' .. counter })
+    lsp.start(opts)
+    return opts.name
+  end
+
+  ---Attachment completes once the client has initialized, which is a round
+  ---trip through the scheduler even for an in-process server.
+  ---@param bufnr integer
+  ---@param name string
+  ---@return integer count
+  local function attached(bufnr, name)
+    vim.wait(2000, function()
+      return #vim.lsp.get_clients({ bufnr = bufnr, name = name }) > 0
+    end)
+    return #vim.lsp.get_clients({ bufnr = bufnr, name = name })
+  end
+
+  it('attaches to a buffer that already had a filetype', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = buffer('lua')
+
+    local name = start()
+
+    assert.are.equal(1, attached(bufnr, name))
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it('attaches to a buffer that gets one afterwards', function()
+    local name = start()
+    local bufnr = buffer('python')
+
+    assert.are.equal(1, attached(bufnr, name))
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it('honours the filetypes gate', function()
+    local name = start({ filetypes = { 'lua' } })
+    local wanted, unwanted = buffer('lua'), buffer('python')
+
+    assert.are.equal(1, attached(wanted, name))
+    assert.are.equal(0, #vim.lsp.get_clients({ bufnr = unwanted, name = name }))
+
+    vim.api.nvim_buf_delete(wanted, { force = true })
+    vim.api.nvim_buf_delete(unwanted, { force = true })
+  end)
+
+  it('reports that it started, and stacks neither autocmd nor client', function()
+    counter = counter + 1
+    local name = 'zsnip_start_' .. counter
+    lsp.start({ name = name })
+    lsp.start({ name = name })
+    lsp.start({ name = name })
+    local bufnr = buffer('lua')
+
+    assert.is_true(lsp.started())
+    assert.are.equal(1, attached(bufnr, name))
+    assert.are.equal(
+      1,
+      #vim.api.nvim_get_autocmds({ group = 'zsnip.lsp', event = 'FileType' })
+    )
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  -- The leak this guards is only observable through the real client: the
+  -- server's reply callback is what stops Client:request() registering a
+  -- request it will never clear.
+  it('leaves no request pending after a completion through a real client', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = buffer('lua')
+    local name = start()
+    assert.are.equal(1, attached(bufnr, name))
+
+    local client = vim.lsp.get_clients({ bufnr = bufnr, name = name })[1]
+    for _ = 1, 5 do
+      client:request('textDocument/completion', {
+        textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+        position = { line = 0, character = 0 },
+      }, function() end, bufnr)
+    end
+
+    assert.are.equal(0, vim.tbl_count(client.requests))
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it('serves the shipped name to a buffer', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = buffer('lua')
+
+    lsp.start()
+
+    assert.are.equal(1, attached(bufnr, 'zsnip'))
+    vim.api.nvim_buf_delete(bufnr, { force = true })
   end)
 end)

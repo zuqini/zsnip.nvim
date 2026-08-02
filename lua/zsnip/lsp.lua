@@ -18,12 +18,14 @@ local M = {}
 ---@field name? string Client name, as it appears in `:LspInfo` (default 'zsnip')
 ---@field filetypes? string[] Attach only to these filetypes (default: all)
 ---@field limit? integer Cap on items per response (default: uncapped)
+---@field documentation? boolean Attach the body as item documentation
+---@field filter? fun(snippet: zsnip.Snippet): boolean
 ---@field trigger_characters? string[] Characters that make a client ask unprompted (default: none)
 
 ---What |vim.lsp.start()| expects back from a `cmd` function. Declared here
 ---because the runtime's own alias for it is private.
 ---@class zsnip.RpcClient
----@field request fun(method: string, params: table?, callback: fun(err: any, result: any)): boolean, integer?
+---@field request fun(method: string, params: table?, callback: fun(err: any, result: any, request_id: integer?), notify_reply: fun(request_id: integer)?): boolean, integer?
 ---@field notify fun(method: string, params: table?): boolean
 ---@field is_closing fun(): boolean
 ---@field terminate fun()
@@ -34,6 +36,16 @@ local function server(opts)
   return function(dispatchers)
     local request_id = 0
     local closing = false
+
+    ---Both ways a client ends a server -- an `exit` notification and a forced
+    ---terminate -- land here, and either way the exit is reported once.
+    local function close()
+      if closing then
+        return
+      end
+      closing = true
+      dispatchers.on_exit(0, 15)
+    end
 
     ---@param params lsp.CompletionParams
     ---@return lsp.CompletionList
@@ -46,12 +58,24 @@ local function server(opts)
           bufnr = bufnr,
           filetype = filetype ~= '' and filetype or nil,
           limit = opts.limit or math.huge,
+          documentation = opts.documentation,
+          filter = opts.filter,
         }),
       }
     end
 
     return {
-      request = function(method, params, callback)
+      ---`notify_reply` is how a client learns the request is done -- it is the
+      ---only thing that clears the entry |vim.lsp.Client:request()| registers,
+      ---and it fires an LspRequest autocmd either way. Answering without it
+      ---leaves one 'pending' request behind per completion, forever, which
+      ---under `autotrigger` is one per keystroke. Calling it before returning
+      ---also tells the client we resolved synchronously, so it never registers
+      ---the request at all.
+      request = function(method, params, callback, notify_reply)
+        request_id = request_id + 1
+        local id = request_id
+
         if method == 'initialize' then
           callback(nil, {
             capabilities = {
@@ -66,29 +90,35 @@ local function server(opts)
               },
             },
             serverInfo = { name = opts.name or 'zsnip' },
-          })
+          }, id)
         elseif method == 'textDocument/completion' then
-          callback(nil, complete(params))
+          callback(nil, complete(params), id)
         else
           -- 'shutdown' and anything a client asks for that was never
           -- advertised: an empty result is a valid answer to all of them.
-          callback(nil, nil)
+          callback(nil, nil, id)
         end
-        request_id = request_id + 1
-        return true, request_id
+
+        if notify_reply then
+          notify_reply(id)
+        end
+        return true, id
       end,
       notify = function(method)
         if method == 'exit' then
-          dispatchers.on_exit(0, 15)
+          close()
         end
         return true
       end,
       is_closing = function()
         return closing
       end,
-      terminate = function()
-        closing = true
-      end,
+      ---A forced stop -- |vim.lsp.Client:stop()| with `force`, `:LspStop!`, a
+      ---restart -- calls this instead of sending 'exit', so this is the only
+      ---place that reports the exit on that path. Without it the client never
+      ---learns the server is gone: the user's `on_exit` never runs and the
+      ---client is never reaped.
+      terminate = close,
     }
   end
 end
