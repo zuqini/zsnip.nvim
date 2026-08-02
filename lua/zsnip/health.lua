@@ -8,7 +8,7 @@ local registry = require('zsnip.registry')
 
 local M = {}
 
-local ISSUES_URL = 'https://github.com/zuqini/zsnip.nvim/issues'
+local ISSUES_URL = 'https://github.com/zuqini/ZSnip.nvim/issues'
 
 local MINIMAL_CONFIG = table.concat({
   "require('zsnip').setup()",

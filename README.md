@@ -1,6 +1,6 @@
 <h1 align="center">zsnip.nvim</h1>
 <div align="center">
-  <img src="https://img.shields.io/github/actions/workflow/status/zuqini/zsnip.nvim/tests.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=tests&labelColor=1e1b4b"> <img src="https://img.shields.io/github/issues/zuqini/zsnip.nvim?style=for-the-badge&logo=github&logoColor=white&color=8b5cf6&labelColor=1e1b4b"> <img src="https://img.shields.io/github/last-commit/zuqini/zsnip.nvim?style=for-the-badge&logo=neovim&color=8b5cf6&labelColor=1e1b4b"> <img src="https://img.shields.io/github/license/zuqini/zsnip.nvim?style=for-the-badge&logo=opensourceinitiative&logoColor=white&color=8b5cf6&labelColor=1e1b4b">
+  <img src="https://img.shields.io/github/actions/workflow/status/zuqini/ZSnip.nvim/tests.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=tests&labelColor=1e1b4b"> <img src="https://img.shields.io/github/issues/zuqini/ZSnip.nvim?style=for-the-badge&logo=github&logoColor=white&color=8b5cf6&labelColor=1e1b4b"> <img src="https://img.shields.io/github/last-commit/zuqini/ZSnip.nvim?style=for-the-badge&logo=neovim&color=8b5cf6&labelColor=1e1b4b"> <img src="https://img.shields.io/github/license/zuqini/ZSnip.nvim?style=for-the-badge&logo=opensourceinitiative&logoColor=white&color=8b5cf6&labelColor=1e1b4b">
 </div>
 
 <p align="center">Snippet collections for Neovim's built-in snippet engine — the loading, not a second engine.</p>
@@ -73,12 +73,12 @@ What that leaves zsnip to do, it does completely:
 ```lua
 -- vim.pack
 vim.pack.add({
-  'https://github.com/zuqini/zsnip.nvim',
+  'https://github.com/zuqini/ZSnip.nvim',
   'https://github.com/rafamadriz/friendly-snippets',
 })
 
 -- lazy.nvim / zpack.nvim
-{ 'zuqini/zsnip.nvim', dependencies = { 'rafamadriz/friendly-snippets' } }
+{ 'zuqini/ZSnip.nvim', dependencies = { 'rafamadriz/friendly-snippets' } }
 ```
 
 ## Quick start
