@@ -222,6 +222,58 @@ describe('lsp.start', function()
     return #vim.lsp.get_clients({ bufnr = bufnr, name = name })
   end
 
+  ---@param bufnr integer
+  ---@return integer
+  local function completedone_handlers(bufnr)
+    return #vim.api.nvim_get_autocmds({ event = 'CompleteDone', buffer = bufnr })
+  end
+
+  -- Without this the items arrive but nothing expands them: the handler that
+  -- reads insertTextFormat lives in vim.lsp.completion and is installed only
+  -- by enable(), so an accepted snippet would put `${1:mod}` in the buffer.
+  it('wires the buffer up for vim.lsp.completion when asked', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = buffer('lua')
+
+    assert.are.equal(0, completedone_handlers(bufnr))
+    local name = start({ completion = true })
+    assert.are.equal(1, attached(bufnr, name))
+    assert.are.equal(1, completedone_handlers(bufnr))
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it('leaves completion alone by default', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = buffer('lua')
+
+    local name = start()
+    assert.are.equal(1, attached(bufnr, name))
+    assert.are.equal(0, completedone_handlers(bufnr))
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  -- Enabling it for every client would take over completion for the user's
+  -- language servers as a side effect of asking for snippets.
+  it('wires up only its own client', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = buffer('lua')
+    local name = start({ completion = true })
+    assert.are.equal(1, attached(bufnr, name))
+
+    -- Named zsnip_* so the shared teardown reaps it; what the wiring keys on
+    -- is the exact name it was started under, which this is not.
+    local other = 'zsnip_other_' .. name
+    vim.lsp.start({ name = other, cmd = lsp.server({ name = other }) }, { bufnr = bufnr })
+    assert.are.equal(1, attached(bufnr, other))
+
+    -- Still just ours: the second client attached without picking one up.
+    assert.are.equal(1, completedone_handlers(bufnr))
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
   it('attaches to a buffer that already had a filetype', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
     local bufnr = buffer('lua')

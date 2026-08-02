@@ -18,6 +18,7 @@ local M = {}
 ---@field name? string Client name, as it appears in `:LspInfo` (default 'zsnip')
 ---@field filetypes? string[] Attach only to these filetypes (default: all)
 ---@field trigger_characters? string[] Characters that make a client ask unprompted (default: none)
+---@field completion? boolean|vim.lsp.completion.BufferOpts Wire each buffer up for |vim.lsp.completion|
 
 ---What |vim.lsp.start()| expects back from a `cmd` function. Declared here
 ---because the runtime's own alias for it is private.
@@ -153,6 +154,26 @@ function M.start(opts)
       attach(args.buf)
     end,
   })
+
+  -- Registered before anything can attach, so the buffers swept up below are
+  -- wired too.
+  if opts.completion then
+    local requested = opts.completion
+    ---@type vim.lsp.completion.BufferOpts
+    local buffer_opts = type(requested) == 'table' and requested or {}
+    vim.api.nvim_create_autocmd('LspAttach', {
+      group = augroup,
+      callback = function(args)
+        -- Ours only. Enabling it for every client would take over completion
+        -- for the user's language servers as a side effect of asking for
+        -- snippets.
+        local client = vim.lsp.get_client_by_id(args.data.client_id)
+        if client and client.name == name then
+          vim.lsp.completion.enable(true, client.id, args.buf, buffer_opts)
+        end
+      end,
+    })
+  end
 
   -- Buffers that already have a filetype missed the autocmd.
   for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
