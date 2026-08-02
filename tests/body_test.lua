@@ -23,6 +23,25 @@ describe('body.resolve', function()
     assert.is_truthy(body.resolve('$UUID'):match('^%x%x%x%x%x%x%x%x%-%x%x%x%x%-4%x%x%x%-[89ab]%x%x%x%-%x+$'))
   end)
 
+  -- Neither Neovim nor LuaJIT seeds math.random, so a generator built on it
+  -- hands out the same "random" value on every start, forever. These are the
+  -- three variables for which that is the whole point.
+  it('does not repeat a UUID or a random number', function()
+    local seen = {}
+    for _ = 1, 32 do
+      for _, name in ipairs({ 'UUID', 'RANDOM', 'RANDOM_HEX' }) do
+        local value = body.resolve('$' .. name)
+        assert.is_nil(seen[value], name .. ' repeated a value: ' .. value)
+        seen[value] = true
+      end
+    end
+  end)
+
+  it('keeps RANDOM and RANDOM_HEX in their documented shape', function()
+    assert.is_truthy(body.resolve('$RANDOM'):match('^%d%d%d%d%d%d$'))
+    assert.is_truthy(body.resolve('$RANDOM_HEX'):match('^%x%x%x%x%x%x$'))
+  end)
+
   it('escapes snippet syntax coming out of a variable', function()
     -- The register is stubbed rather than written to: a headless CI runner has
     -- no clipboard provider, so '+' reads back empty there.
@@ -56,6 +75,54 @@ describe('body.resolve', function()
   end)
 end)
 
+describe('body.resolve with a shared cache', function()
+  ---@return integer reads, function restore
+  local function counting_clipboard()
+    local getreg = vim.fn.getreg
+    local reads = { count = 0 }
+    vim.fn.getreg = function()
+      reads.count = reads.count + 1
+      return { 'pasted' }
+    end
+    return reads, function()
+      vim.fn.getreg = getreg
+    end
+  end
+
+  it('reads an expensive variable once for the whole batch', function()
+    local reads, restore = counting_clipboard()
+    local cache = {}
+    for _ = 1, 10 do
+      assert.are.equal('pasted', body.resolve('$CLIPBOARD', cache))
+    end
+    restore()
+
+    assert.are.equal(1, reads.count)
+  end)
+
+  it('still reads it per body without one', function()
+    local reads, restore = counting_clipboard()
+    for _ = 1, 10 do
+      body.resolve('$CLIPBOARD')
+    end
+    restore()
+
+    assert.are.equal(10, reads.count)
+  end)
+
+  it('caches a name that resolves to nothing', function()
+    local cache = {}
+    assert.are.equal('$NOPE', body.resolve('$NOPE', cache))
+    assert.are.equal(false, cache.NOPE)
+  end)
+
+  it('never caches the variables whose point is to differ', function()
+    local cache = {}
+    assert.are_not.equal(body.resolve('$UUID', cache), body.resolve('$UUID', cache))
+    assert.is_nil(cache.UUID)
+  end)
+end)
+
 describe('body.editable_final_tabstop', function()
   it('renumbers a placeholder on the exit point past the last tabstop', function()
     assert.are.equal('${1:a} ${2:b}', body.editable_final_tabstop('${1:a} ${0:b}'))
@@ -67,6 +134,11 @@ describe('body.editable_final_tabstop', function()
 
   it('leaves a bare $0 alone', function()
     assert.are.equal('${1:a}$0', body.editable_final_tabstop('${1:a}$0'))
+  end)
+
+  it('leaves an escaped one alone -- it is text, not a tabstop', function()
+    assert.are.equal('\\${0:a}', body.editable_final_tabstop('\\${0:a}'))
+    assert.are.equal('\\${0:a} ${1:b}', body.editable_final_tabstop('\\${0:a} ${0:b}'))
   end)
 end)
 

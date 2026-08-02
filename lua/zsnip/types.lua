@@ -16,6 +16,10 @@
 
 ---@alias zsnip.LoaderKind "vscode" | "snipmate"
 
+---Resolved variable values shared across a batch of bodies. `false` records a
+---name that resolved to nothing, so it stays a cache hit.
+---@alias zsnip.ResolveCache table<string, string|false>
+
 ---Options accepted by both loaders' `load()`/`lazy_load()`.
 ---@class zsnip.LoaderOpts
 ---@field paths? string|string[] Directories to read in addition to the runtimepath
