@@ -149,3 +149,18 @@ which is what lets the client do its own filtering and ranking.
 
 `require('zsnip.lsp').server(opts)` returns the `cmd` function on its own, for
 wiring the server up by hand.
+
+### `zsnip.blink`
+
+A blink.cmp source module — `{ module = 'zsnip.blink' }`. Its provider `opts`
+accept `limit`, `documentation` and `filter`, forwarded to
+`completion_items()`. Requires nothing from blink itself.
+
+### `zsnip.cmp`
+
+An nvim-cmp source. `require('zsnip.cmp').register(opts)` registers it under
+the name `zsnip`; `opts` are the same three. nvim-cmp is required by
+`register()` only, so the module loads without it.
+
+Use one of these *or* `start_lsp_server()`, not both — see
+[integrations](integrations.md).

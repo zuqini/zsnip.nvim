@@ -41,8 +41,8 @@ What zsnip adds on top of the engine:
   time after the completion engine has already deleted the typed word.
 - `${0:text}` is renumbered past the last real tabstop, so a placeholder on
   the exit point is reachable.
-- An in-process LSP server, so any completion engine offers the snippets
-  without a per-engine source.
+- Native sources for blink.cmp and nvim-cmp, and an in-process LSP server for
+  everything else -- including Neovim's own completion, with no plugin at all.
 
 ==============================================================================
 2. REQUIREMENTS                                            *zsnip-requirements*
@@ -136,6 +136,37 @@ config can shadow a pack.
 ==============================================================================
 7. COMPLETION                                                *zsnip-completion*
 
+Three ways to offer the snippets. Pick one -- a native source for your engine,
+or the LSP server. Running both offers every snippet twice.
+
+                                                                 *zsnip.blink*
+blink.cmp~
+>lua
+    require('blink.cmp').setup({
+      snippets = { preset = 'default' },
+      sources = {
+        default = { 'lsp', 'path', 'zsnip', 'buffer' },
+        providers = { zsnip = { name = 'zsnip', module = 'zsnip.blink' } },
+      },
+    })
+<
+Leave blink's own built-in `snippets` source out of `default`: it reads the
+same VSCode packs and cannot see the snipmate ones. The provider `opts` accept
+`limit`, `documentation` and `filter`. The module requires nothing from blink.
+
+                                                                   *zsnip.cmp*
+nvim-cmp~
+>lua
+    require('zsnip.cmp').register()
+
+    require('cmp').setup({
+      snippet = { expand = function(args) vim.snippet.expand(args.body) end },
+      sources = { { name = 'nvim_lsp' }, { name = 'zsnip' } },
+    })
+<
+The `snippet.expand` line is what makes nvim-cmp use Neovim's engine. nvim-cmp
+is required by `register()` only, so the module loads without it.
+
                                                      *zsnip.start_lsp_server()*
 zsnip.start_lsp_server({opts})
 
@@ -149,9 +180,10 @@ Options:
     limit               integer   Cap on items per response (default: uncapped)
     trigger_characters  string[]  Characters that make a client ask unprompted
 
-blink.cmp and nvim-cmp receive the snippets through their existing LSP source.
-For Neovim's own completion, name the trigger characters -- |vim.lsp.completion|
-reads them to decide when to ask:
+blink.cmp and nvim-cmp can receive the snippets this way too, through their
+existing LSP source, at the cost of no longer being able to configure snippets
+separately from language-server items. For Neovim's own completion, name the
+trigger characters -- |vim.lsp.completion| reads them to decide when to ask:
 
 >lua
     require('zsnip').start_lsp_server({

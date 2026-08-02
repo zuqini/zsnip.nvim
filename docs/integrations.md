@@ -1,16 +1,66 @@
 # Integrations
 
-zsnip offers snippets two ways: as a language server every engine already
-knows how to talk to, or as completion items you place yourself.
+zsnip offers snippets three ways. Pick **one** — a native source for your
+engine, or the LSP server. Running both offers every snippet twice.
 
-## The LSP server (recommended)
+| | Use when | Trade-off |
+| --- | --- | --- |
+| `zsnip.blink` | You use blink.cmp | Snippets stay their own provider, so blink's `score_offset`, `min_keyword_length` and kind styling apply to them |
+| `zsnip.cmp` | You use nvim-cmp | Same, for nvim-cmp's source config |
+| `zsnip.start_lsp_server()` | Anything else, or nothing at all | One call covers every LSP-speaking menu, but the items arrive folded in with your language servers' |
+
+## blink.cmp
+
+```lua
+require('blink.cmp').setup({
+  -- 'default' is blink's own vim.snippet wrapper -- the engine zsnip loads for.
+  snippets = { preset = 'default' },
+  sources = {
+    default = { 'lsp', 'path', 'zsnip', 'buffer' },
+    providers = {
+      zsnip = {
+        name = 'zsnip',
+        module = 'zsnip.blink',
+        -- opts are optional; all three are passed to completion_items()
+        opts = { documentation = true },
+      },
+    },
+  },
+})
+```
+
+Leave blink's own built-in `snippets` source out of `default`: it reads the
+same VSCode packs, so listing both offers everything twice — and it cannot see
+the snipmate ones at all.
+
+The source requires nothing from blink. It is a table with `new`, `enabled`
+and `get_completions`, returning plain LSP completion items, so there is no
+blink internal for it to drift against.
+
+## nvim-cmp
+
+```lua
+require('zsnip.cmp').register({ documentation = true })
+
+require('cmp').setup({
+  snippet = { expand = function(args) vim.snippet.expand(args.body) end },
+  sources = { { name = 'nvim_lsp' }, { name = 'zsnip' } },
+})
+```
+
+The `snippet.expand` line is what makes nvim-cmp use Neovim's engine rather
+than asking for LuaSnip. `register()` is the only thing that requires nvim-cmp,
+so the module loads fine on a config without it.
+
+## The LSP server
 
 ```lua
 require('zsnip').start_lsp_server()
 ```
 
-One call covers every engine at once, and there is no per-engine source to
-keep working as that engine's API moves.
+An in-process language server answering `textDocument/completion` with the
+snippets of the requesting buffer's filetype. Nothing is spawned and nothing
+leaves the process.
 
 ### Built-in completion
 
@@ -34,29 +84,9 @@ vim.api.nvim_create_autocmd('LspAttach', {
 session — nothing else is involved. Without `autotrigger`, drop
 `trigger_characters` and ask for the menu with `<C-x><C-o>`.
 
-### blink.cmp
-
-The snippets arrive through blink's existing `lsp` source. Leave blink's own
-snippet preset on `default` (it uses `vim.snippet`), and turn off its built-in
-`snippets` source so packs are not offered twice:
-
-```lua
-require('blink.cmp').setup({
-  snippets = { preset = 'default' },
-  sources = { default = { 'lsp', 'path', 'buffer' } },
-})
-```
-
-### nvim-cmp
-
-Same idea — `nvim_lsp` carries them, and `vim.snippet` expands them:
-
-```lua
-require('cmp').setup({
-  snippet = { expand = function(args) vim.snippet.expand(args.body) end },
-  sources = { { name = 'nvim_lsp' } },
-})
-```
+blink.cmp and nvim-cmp can consume the server too, through their existing LSP
+source, if you would rather not add a provider. The cost is that snippets are
+no longer separable from your language servers' items in that engine's config.
 
 ## Building your own source
 
@@ -69,6 +99,7 @@ local items = require('zsnip').completion_items({
   bufnr = bufnr,
   limit = 20,
   documentation = false, -- let the popup preview the expanded body instead
+  filter = function(snippet) return not already_offered[snippet.prefix] end,
 })
 ```
 

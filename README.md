@@ -15,11 +15,29 @@ finding the snippet packages on your runtimepath, reading the two formats they
 come in, deciding which ones a filetype gets, and handing them to a completion
 menu.
 
-Every established option answers that by bringing its own engine along:
-LuaSnip, vim-vsnip, nvim-snippy and mini.snippets each re-implement expansion
-and session management. zsnip does not. It loads snippets and hands the body
-to `vim.snippet.expand()`, which means the engine running your snippets is the
+The established options answer that by bringing their own engine along:
+[LuaSnip](https://github.com/L3MON4D3/LuaSnip),
+[vim-vsnip](https://github.com/hrsh7th/vim-vsnip),
+[nvim-snippy](https://github.com/dcampos/nvim-snippy) and
+[mini.snippets](https://github.com/nvim-mini/mini.snippets) each re-implement
+expansion and session management. zsnip does not. It loads snippets and hands
+the body to `vim.snippet.expand()`, so the engine running your snippets is the
 one Neovim maintains.
+
+Two projects already do that. Here is the honest comparison:
+
+| | Engine | VSCode packs | snipmate | Pack discovery |
+| --- | --- | --- | --- | --- |
+| [nvim-snippets](https://github.com/garymjr/nvim-snippets) | `vim.snippet` | yes | no | directories you list; friendly-snippets special-cased by directory name |
+| [blink.cmp](https://cmp.saghen.dev/configuration/snippets)'s built-in `snippets` source | `vim.snippet` | yes | no | runtimepath + configured paths, but only ever for blink |
+| **zsnip** | `vim.snippet` | yes | **yes** | every `package.json` and `snippets/*.snippets` on the runtimepath, re-checked per lookup |
+
+nvim-snippets is the closest prior art and covers the VSCode-only case, but it
+has had no commit since July 2024, reads no snipmate files at all, and builds
+its pack list once during `setup()` from directories you maintain — so a plugin
+that ships snippets and joins the runtimepath when its filetype opens is never
+seen. blink's source is good and well maintained, but it is part of a
+completion engine: it serves blink and nothing else.
 
 What that leaves zsnip to do, it does completely:
 
@@ -30,7 +48,9 @@ What that leaves zsnip to do, it does completely:
   turns every other variable into a tabstop holding its own name — which is
   why an unpatched `copyright` snippet inserts a literal `CURRENT_YEAR`.
   zsnip resolves the date, workspace, comment-marker, clipboard, `UUID` and
-  `RANDOM` families before the body reaches the engine.
+  `RANDOM` families before the body reaches the engine — and escapes what it
+  substitutes, so a clipboard holding `$1` or `50%` lands as text instead of
+  turning into a tabstop or being eaten as a pattern.
 - **Bodies core cannot parse.** ~4% of friendly-snippets' bodies fail the LSP
   snippet grammar. Expanding one raises *after* the completion engine has
   deleted the word you typed, so it takes the word with it. zsnip drops them
@@ -39,9 +59,9 @@ What that leaves zsnip to do, it does completely:
   placeholder sitting on it lands in the buffer unreachable — and a body whose
   only tabstop is `$0` gets no session at all. zsnip renumbers it past the
   last real tabstop.
-- **One line to any completion menu.** An in-process LSP server serves the
-  snippets, so blink.cmp, nvim-cmp and `vim.lsp.completion` pick them up with
-  no per-engine source to install or maintain.
+- **Whichever menu you use.** A native source for blink.cmp and for nvim-cmp,
+  plus an in-process LSP server for everything else — including Neovim's own
+  `vim.lsp.completion`, with no completion plugin at all.
 
 ## Requirements
 
@@ -68,10 +88,9 @@ require('zsnip').setup()
 
 require('zsnip.loaders.from_vscode').lazy_load()
 require('zsnip.loaders.from_snipmate').lazy_load()
-
--- Offer them in every completion menu that speaks LSP.
-require('zsnip').start_lsp_server()
 ```
+
+Then pick one way to offer them — see [wiring](#wiring-it-into-a-completion-menu).
 
 Nothing is read at startup. A package is scanned and decoded the first time a
 filetype it covers is opened, and the runtimepath is re-checked on every
@@ -80,21 +99,51 @@ picked up the moment it arrives.
 
 ## Wiring it into a completion menu
 
-The in-process LSP server is the recommended route — it works for every engine
-at once, including Neovim's own:
+Pick **one** — a native source, or the LSP server. Both at once offers every
+snippet twice.
+
+**blink.cmp**
 
 ```lua
-require('zsnip').start_lsp_server()
-
--- Built-in completion (no plugin at all):
-vim.api.nvim_create_autocmd('LspAttach', {
-  callback = function(args) vim.lsp.completion.enable(true, args.data.client_id, args.buf) end,
+require('blink.cmp').setup({
+  snippets = { preset = 'default' },
+  sources = {
+    default = { 'lsp', 'path', 'zsnip', 'buffer' },
+    providers = { zsnip = { name = 'zsnip', module = 'zsnip.blink' } },
+  },
 })
 ```
 
-blink.cmp and nvim-cmp consume it through their existing LSP source — see
-[docs/integrations.md](docs/integrations.md) for per-engine notes, and for
-building your own source with `completion_items()`.
+**nvim-cmp**
+
+```lua
+require('zsnip.cmp').register()
+
+require('cmp').setup({
+  snippet = { expand = function(args) vim.snippet.expand(args.body) end },
+  sources = { { name = 'nvim_lsp' }, { name = 'zsnip' } },
+})
+```
+
+**Anything else, including no completion plugin at all** — an in-process LSP
+server, which every LSP-speaking menu already knows how to consume:
+
+```lua
+require('zsnip').start_lsp_server({
+  -- vim.lsp.completion decides when to ask from these; blink and nvim-cmp
+  -- ask on every keystroke of their own accord and do not need them.
+  trigger_characters = vim.split('abcdefghijklmnopqrstuvwxyz_', ''),
+})
+
+vim.api.nvim_create_autocmd('LspAttach', {
+  callback = function(args)
+    vim.lsp.completion.enable(true, args.data.client_id, args.buf, { autotrigger = true })
+  end,
+})
+```
+
+See [docs/integrations.md](docs/integrations.md) for the trade-offs between
+these, and for building your own source with `completion_items()`.
 
 ## Snippets from Lua
 
