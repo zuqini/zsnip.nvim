@@ -17,10 +17,7 @@
 
 local completion = require('zsnip.completion')
 
----@class zsnip.BlinkOpts
----@field limit? integer Cap on items per response (default: uncapped -- blink filters)
----@field documentation? boolean Attach the body as item documentation
----@field filter? fun(snippet: zsnip.Snippet): boolean
+---@class zsnip.BlinkOpts : zsnip.SourceOpts
 
 local M = {}
 
@@ -45,12 +42,7 @@ function M:get_completions(ctx, callback)
   callback({
     is_incomplete_forward = false,
     is_incomplete_backward = false,
-    items = completion.items({
-      bufnr = ctx and ctx.bufnr or nil,
-      limit = self.opts.limit or math.huge,
-      documentation = self.opts.documentation,
-      filter = self.opts.filter,
-    }),
+    items = completion.items(completion.source_opts(self.opts, ctx and ctx.bufnr or nil)),
   })
   return function() end
 end

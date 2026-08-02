@@ -31,6 +31,22 @@ local function item(snippet, text, filetype)
   }
 end
 
+---What a source forwards, in one place so that a new `zsnip.SourceOpts` field
+---does not have to be re-plumbed through all three of them. The uncapped
+---default is theirs alone: `max_items` exists for hand-rolled callers, and an
+---engine that filters and ranks the response wants the whole filetype.
+---@param opts zsnip.SourceOpts
+---@param bufnr? integer
+---@return zsnip.CompletionOpts
+function M.source_opts(opts, bufnr)
+  return {
+    bufnr = bufnr,
+    limit = opts.limit or math.huge,
+    documentation = opts.documentation,
+    filter = opts.filter,
+  }
+end
+
 ---@param opts? zsnip.CompletionOpts
 ---@return lsp.CompletionItem[]
 function M.items(opts)
@@ -68,12 +84,9 @@ function M.items(opts)
     end
   end
 
-  -- One cache for the whole batch. Resolving a body is per-item work, but the
-  -- values are not: `$CLIPBOARD` is a round trip to the clipboard provider,
-  -- and paying it once per snippet puts tens of milliseconds on the UI thread
-  -- for every keystroke that opens the menu.
-  ---@type zsnip.ResolveCache
-  local resolved = {}
+  -- Resolving a body is per-item work; the values in it are not. One resolver
+  -- for the whole response shares them across the items -- see `body.batch()`.
+  local resolve = body.batch()
 
   local items = {}
   for _, trigger in ipairs(triggers) do
@@ -81,7 +94,7 @@ function M.items(opts)
       break
     end
     local snippet = by_prefix[trigger]
-    local text = body.text(snippet, resolved)
+    local text = resolve(snippet)
     if text then
       local entry = item(snippet, text, filetype)
       if not documented then

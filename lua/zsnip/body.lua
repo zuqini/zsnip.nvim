@@ -49,7 +49,7 @@ local DATE_FORMAT = {
 ---@return integer[]
 local function random_bytes(count)
   local ok, bytes = pcall(vim.uv.random, count)
-  if not ok or type(bytes) ~= 'string' then
+  if not ok or type(bytes) ~= 'string' or #bytes < count then
     local fallback = {}
     for index = 1, count do
       fallback[index] = math.random(0, 255)
@@ -71,6 +71,11 @@ local function comment_parts()
   end
   return vim.trim(left), vim.trim(right)
 end
+
+---Values whose whole point is to differ per use, so a batch must never share
+---them: two snippets in one menu holding the same UUID defeats having one.
+---Anything added to `variable()` below that must not repeat belongs here.
+local VOLATILE = { RANDOM = true, RANDOM_HEX = true, UUID = true }
 
 ---@param name string
 ---@return string?
@@ -115,60 +120,92 @@ local function variable(name)
   return nil
 end
 
----Re-read for every use even when a cache is offered: two snippets in one
----menu sharing a UUID would defeat the point of one.
-local VOLATILE = { RANDOM = true, RANDOM_HEX = true, UUID = true }
+---Only an *odd* run of backslashes escapes what follows: in `\\$FOO` the pair
+---is an escaped backslash and the `$` is still syntax.
+---
+---Looked up behind a match rather than captured by one. Capturing the run
+---needs a leading `(\\*)`, which makes the engine count backslashes at every
+---position it scans -- ~20% slower over a filetype of bodies than the `(\\?)`
+---it would replace, and that one is already wrong for an even run. A `()`
+---position capture costs nothing until something actually matches.
+---@param subject string
+---@param at integer Position of the `$`
+---@return boolean
+local function escaped(subject, at)
+  local index = at - 1
+  while index >= 1 and subject:byte(index) == 92 do -- '\'
+    index = index - 1
+  end
+  return (at - 1 - index) % 2 == 1
+end
+
+---Values already resolved, shared until an entry point below starts a new
+---batch. An upvalue rather than something `substitute` closes over: it is
+---handed to gsub twice per body, and allocating a closure there costs more
+---than the sharing saves -- measurably, on a whole filetype of items.
+---Resolution is synchronous and never re-enters, so one slot is enough. The
+---worst a stray reset can do is make the next lookup miss.
+---@type table<string, string|false>
+local shared = {}
+
+---The string the gsubs below are walking, so `substitute` can look behind a
+---match without a closure over it. An upvalue for the same reason `shared` is.
+---@type string
+local subject = ''
 
 ---Returning nil leaves the whole match alone, which is what both an escaped
 ---`\${VAR}` and a name we do not know should do -- plenty of bodies contain
 ---things like LaTeX's `$C$` or a bare `$NAME` that are text, not variables.
----@param cache zsnip.ResolveCache?
----@return fun(escape: string, name: string): string?
-local function substituter(cache)
-  return function(escape, name)
-    if escape == '\\' then
-      return nil
-    end
-
-    local value
-    if cache and not VOLATILE[name] then
-      value = cache[name]
-      if value == nil then
-        -- `false`, not nil: an unknown name has to stay a cache hit, or every
-        -- `$NAME` that is plain text is looked up again for every snippet.
-        value = variable(name) or false
-        cache[name] = value
-      end
-      value = value or nil
-    else
-      value = variable(name)
-    end
-
-    -- The result is re-parsed as snippet text, so a '$' or '}' out of a
-    -- clipboard has to stop being syntax.
-    return value and (value:gsub('[\\%$}]', '\\%0'))
+---@param at integer
+---@param name string
+---@return string?
+local function substitute(at, name)
+  if escaped(subject, at) then
+    return nil
   end
+
+  local value
+  if VOLATILE[name] then
+    value = variable(name)
+  else
+    value = shared[name]
+    if value == nil then
+      -- `false`, not nil: an unknown name has to stay a hit, or every `$NAME`
+      -- that is plain text is looked up again for every snippet.
+      value = variable(name) or false
+      shared[name] = value
+    end
+    value = value or nil
+  end
+
+  -- The result is re-parsed as snippet text, so a '$' or '}' out of a
+  -- clipboard has to stop being syntax.
+  return value and (value:gsub('[\\%$}]', '\\%0'))
+end
+
+---@param body string
+---@return string
+local function resolve(body)
+  if not body:find('$', 1, true) then
+    return body
+  end
+  subject = body
+  body = body:gsub('()%${([A-Z_][A-Z_0-9]*)}', substitute)
+  -- The first pass rewrote it, so the positions the second one reports are
+  -- into a different string.
+  subject = body
+  return (body:gsub('()%$([A-Z_][A-Z_0-9]*)', substitute))
 end
 
 ---Resolve the variables Neovim does not know about.
 ---
----Called per expansion rather than once at load: a body outlives the session
----it was read in, and a stale CURRENT_MINUTE is worse than no caching.
----
----`cache` shares resolved values across a batch of bodies. Worth passing when
----building a whole filetype's completion items: `CLIPBOARD` costs a round
----trip to the clipboard provider -- milliseconds, on the UI thread -- and
----without it that is paid once per snippet, per keystroke.
+---Resolved per expansion rather than once at load: a body outlives the session
+---it was read in, and a stale CURRENT_MINUTE is worse than no sharing.
 ---@param body string
----@param cache? zsnip.ResolveCache
 ---@return string
-function M.resolve(body, cache)
-  if not body:find('$', 1, true) then
-    return body
-  end
-  local substitute = substituter(cache)
-  body = body:gsub('(\\?)%${([A-Z_][A-Z_0-9]*)}', substitute)
-  return (body:gsub('(\\?)%$([A-Z_][A-Z_0-9]*)', substitute))
+function M.resolve(body)
+  shared = {}
+  return resolve(body)
 end
 
 ---Renumber `${0:text}` past the last real tabstop so its default lands in the
@@ -193,24 +230,18 @@ function M.editable_final_tabstop(body)
   end
 
   local renumbered = ('${%d:'):format(last + 1)
-  return (body:gsub('(\\?)%${0:', function(escape)
+  return (body:gsub('()%${0:', function(at)
     -- `\${0:` is text the author escaped to keep verbatim, not a tabstop.
-    -- Returning nil leaves the match alone; it cannot be written as
-    -- `escape == '\\' and nil or renumbered`, which is always `renumbered`.
-    if escape == '\\' then
+    if escaped(body, at) then
       return nil
     end
     return renumbered
   end))
 end
 
----Turn a snippet's body into the text handed to |vim.snippet.expand()|.
----Returns nil when a function body declines to produce one, or when what it
----produced cannot be parsed.
 ---@param snippet zsnip.Snippet
----@param cache? zsnip.ResolveCache Shared across a batch; see |M.resolve()|
 ---@return string?
-function M.text(snippet, cache)
+local function text(snippet)
   local body = snippet.body
   if type(body) == 'function' then
     local ok, produced = pcall(body)
@@ -222,7 +253,31 @@ function M.text(snippet, cache)
       return nil
     end
   end
-  return M.resolve(body, cache)
+  return resolve(body)
+end
+
+---Turn a snippet's body into the text handed to |vim.snippet.expand()|.
+---Returns nil when a function body declines to produce one, or when what it
+---produced cannot be parsed.
+---@param snippet zsnip.Snippet
+---@return string?
+function M.text(snippet)
+  shared = {}
+  return text(snippet)
+end
+
+---Begin a batch and return the function that turns each of its snippets into
+---text. The batch shares what it resolves, which is what a single keystroke
+---turning a whole filetype into completion items needs: `$CLIPBOARD` is a
+---round trip to the clipboard provider, and paying that per snippet puts tens
+---of milliseconds on the UI thread.
+---
+---Call it again for the next batch rather than holding one across keystrokes:
+---what a batch shares includes CURRENT_MINUTE.
+---@return fun(snippet: zsnip.Snippet): string?
+function M.batch()
+  shared = {}
+  return text
 end
 
 return M

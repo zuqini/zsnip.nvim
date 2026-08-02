@@ -1,4 +1,5 @@
 local body = require('zsnip.body')
+local helpers = require('helpers')
 
 describe('body.resolve', function()
   it('fills in variables Neovim does not know', function()
@@ -23,18 +24,37 @@ describe('body.resolve', function()
     assert.is_truthy(body.resolve('$UUID'):match('^%x%x%x%x%x%x%x%x%-%x%x%x%x%-4%x%x%x%-[89ab]%x%x%x%-%x+$'))
   end)
 
-  -- Neither Neovim nor LuaJIT seeds math.random, so a generator built on it
-  -- hands out the same "random" value on every start, forever. These are the
-  -- three variables for which that is the whole point.
-  it('does not repeat a UUID or a random number', function()
-    local seen = {}
-    for _ = 1, 32 do
-      for _, name in ipairs({ 'UUID', 'RANDOM', 'RANDOM_HEX' }) do
+  -- A `seen` per variable, and RANDOM left out of it: its six decimal digits
+  -- are a space small enough that 32 draws repeat by chance often enough to
+  -- flake, so a repeat there is not evidence of anything. The seeded test
+  -- below is what guards RANDOM.
+  it('does not repeat a UUID or a random hex string', function()
+    for _, name in ipairs({ 'UUID', 'RANDOM_HEX' }) do
+      local seen = {}
+      for _ = 1, 32 do
         local value = body.resolve('$' .. name)
         assert.is_nil(seen[value], name .. ' repeated a value: ' .. value)
         seen[value] = true
       end
     end
+  end)
+
+  -- The defect is not repetition *within* a run -- an unseeded math.random
+  -- still walks a sequence -- but that it is the same sequence on every start,
+  -- forever. Reseeding to a fixed value stages four starts inside one process:
+  -- a value derived from math.random is identical across all four, a value
+  -- from the CSPRNG is not. Each variable is checked on its own, or one that
+  -- still had real entropy would carry the others.
+  it('does not repeat across identically seeded starts', function()
+    for _, name in ipairs({ 'UUID', 'RANDOM', 'RANDOM_HEX' }) do
+      local values = {}
+      for _ = 1, 4 do
+        math.randomseed(1)
+        values[body.resolve('$' .. name)] = true
+      end
+      assert.is_true(vim.tbl_count(values) > 1, name .. ' is a function of math.randomseed()')
+    end
+    math.randomseed(os.time())
   end)
 
   it('keeps RANDOM and RANDOM_HEX in their documented shape', function()
@@ -43,16 +63,24 @@ describe('body.resolve', function()
   end)
 
   it('escapes snippet syntax coming out of a variable', function()
-    -- The register is stubbed rather than written to: a headless CI runner has
-    -- no clipboard provider, so '+' reads back empty there.
-    local getreg = vim.fn.getreg
-    vim.fn.getreg = function()
-      return { 'a $1 }' }
-    end
+    local _, restore = helpers.stub_clipboard('a $1 }')
     local resolved = body.resolve('$CLIPBOARD')
-    vim.fn.getreg = getreg
+    restore()
 
     assert.are.equal('a \\$1 \\}', resolved)
+  end)
+
+  -- It is the parity of the backslash run that decides, not its presence: two
+  -- is an escaped backslash and the `$` is still syntax, three is an escaped
+  -- backslash *and* an escaped `$`.
+  it('counts the backslash run before a variable', function()
+    local year = os.date('%Y')
+
+    assert.are.equal('\\\\' .. year, body.resolve('\\\\$CURRENT_YEAR'))
+    assert.are.equal('\\\\' .. year, body.resolve('\\\\${CURRENT_YEAR}'))
+
+    assert.are.equal('\\\\\\$CURRENT_YEAR', body.resolve('\\\\\\$CURRENT_YEAR'))
+    assert.are.equal('\\\\\\${CURRENT_YEAR}', body.resolve('\\\\\\${CURRENT_YEAR}'))
   end)
 
   it('reads comment markers off the buffer', function()
@@ -75,51 +103,43 @@ describe('body.resolve', function()
   end)
 end)
 
-describe('body.resolve with a shared cache', function()
-  ---@return integer reads, function restore
-  local function counting_clipboard()
-    local getreg = vim.fn.getreg
-    local reads = { count = 0 }
-    vim.fn.getreg = function()
-      reads.count = reads.count + 1
-      return { 'pasted' }
-    end
-    return reads, function()
-      vim.fn.getreg = getreg
-    end
+describe('body.batch', function()
+  ---@param text string
+  ---@return zsnip.Snippet
+  local function snippet(text)
+    return { prefix = 'x', body = text }
   end
 
   it('reads an expensive variable once for the whole batch', function()
-    local reads, restore = counting_clipboard()
-    local cache = {}
+    local reads, restore = helpers.stub_clipboard()
+    local resolve = body.batch()
     for _ = 1, 10 do
-      assert.are.equal('pasted', body.resolve('$CLIPBOARD', cache))
+      assert.are.equal('pasted', resolve(snippet('$CLIPBOARD')))
     end
     restore()
 
     assert.are.equal(1, reads.count)
   end)
 
-  it('still reads it per body without one', function()
-    local reads, restore = counting_clipboard()
+  it('still reads it per body outside one', function()
+    local reads, restore = helpers.stub_clipboard()
     for _ = 1, 10 do
-      body.resolve('$CLIPBOARD')
+      body.text(snippet('$CLIPBOARD'))
     end
     restore()
 
     assert.are.equal(10, reads.count)
   end)
 
-  it('caches a name that resolves to nothing', function()
-    local cache = {}
-    assert.are.equal('$NOPE', body.resolve('$NOPE', cache))
-    assert.are.equal(false, cache.NOPE)
+  it('leaves a name that resolves to nothing alone, every time', function()
+    local resolve = body.batch()
+    assert.are.equal('$NOPE', resolve(snippet('$NOPE')))
+    assert.are.equal('$NOPE', resolve(snippet('$NOPE')))
   end)
 
-  it('never caches the variables whose point is to differ', function()
-    local cache = {}
-    assert.are_not.equal(body.resolve('$UUID', cache), body.resolve('$UUID', cache))
-    assert.is_nil(cache.UUID)
+  it('never shares the variables whose point is to differ', function()
+    local resolve = body.batch()
+    assert.are_not.equal(resolve(snippet('$UUID')), resolve(snippet('$UUID')))
   end)
 end)
 
@@ -139,6 +159,15 @@ describe('body.editable_final_tabstop', function()
   it('leaves an escaped one alone -- it is text, not a tabstop', function()
     assert.are.equal('\\${0:a}', body.editable_final_tabstop('\\${0:a}'))
     assert.are.equal('\\${0:a} ${1:b}', body.editable_final_tabstop('\\${0:a} ${0:b}'))
+  end)
+
+  -- An escaped *backslash* is not an escaped tabstop: `\\${0:a}` is a literal
+  -- backslash followed by a real exit-point placeholder, and packs that emit
+  -- literal backslashes (LaTeX, markdown) hit this.
+  it('renumbers one behind an escaped backslash', function()
+    assert.are.equal('\\\\${1:a}', body.editable_final_tabstop('\\\\${0:a}'))
+    -- Three: the backslash is escaped and so is the `$`, so it is text again.
+    assert.are.equal('\\\\\\${0:a}', body.editable_final_tabstop('\\\\\\${0:a}'))
   end)
 end)
 

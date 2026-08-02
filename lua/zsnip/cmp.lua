@@ -15,10 +15,7 @@
 
 local completion = require('zsnip.completion')
 
----@class zsnip.CmpOpts
----@field limit? integer Cap on items per response (default: uncapped -- cmp filters)
----@field documentation? boolean Attach the body as item documentation
----@field filter? fun(snippet: zsnip.Snippet): boolean
+---@class zsnip.CmpOpts : zsnip.SourceOpts
 
 local M = {}
 
@@ -49,12 +46,7 @@ end
 ---@param callback fun(items: lsp.CompletionItem[])
 function M:complete(params, callback)
   local bufnr = vim.tbl_get(params or {}, 'context', 'bufnr')
-  callback(completion.items({
-    bufnr = bufnr,
-    limit = self.opts.limit or math.huge,
-    documentation = self.opts.documentation,
-    filter = self.opts.filter,
-  }))
+  callback(completion.items(completion.source_opts(self.opts, bufnr)))
 end
 
 ---Register the source with nvim-cmp under the name 'zsnip'.

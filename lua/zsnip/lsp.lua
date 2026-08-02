@@ -14,12 +14,9 @@ local completion = require('zsnip.completion')
 
 local M = {}
 
----@class zsnip.LspOpts
+---@class zsnip.LspOpts : zsnip.SourceOpts
 ---@field name? string Client name, as it appears in `:LspInfo` (default 'zsnip')
 ---@field filetypes? string[] Attach only to these filetypes (default: all)
----@field limit? integer Cap on items per response (default: uncapped)
----@field documentation? boolean Attach the body as item documentation
----@field filter? fun(snippet: zsnip.Snippet): boolean Keep only the snippets it returns true for
 ---@field trigger_characters? string[] Characters that make a client ask unprompted (default: none)
 
 ---What |vim.lsp.start()| expects back from a `cmd` function. Declared here
@@ -52,16 +49,9 @@ local function server(opts)
     local function complete(params)
       local bufnr = vim.uri_to_bufnr(params.textDocument.uri)
       local filetype = vim.bo[bufnr].filetype
-      return {
-        isIncomplete = false,
-        items = completion.items({
-          bufnr = bufnr,
-          filetype = filetype ~= '' and filetype or nil,
-          limit = opts.limit or math.huge,
-          documentation = opts.documentation,
-          filter = opts.filter,
-        }),
-      }
+      local forwarded = completion.source_opts(opts, bufnr)
+      forwarded.filetype = filetype ~= '' and filetype or nil
+      return { isIncomplete = false, items = completion.items(forwarded) }
     end
 
     return {

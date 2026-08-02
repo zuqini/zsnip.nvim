@@ -16,10 +16,6 @@
 
 ---@alias zsnip.LoaderKind "vscode" | "snipmate"
 
----Resolved variable values shared across a batch of bodies. `false` records a
----name that resolved to nothing, so it stays a cache hit.
----@alias zsnip.ResolveCache table<string, string|false>
-
 ---Options accepted by both loaders' `load()`/`lazy_load()`.
 ---@class zsnip.LoaderOpts
 ---@field paths? string|string[] Directories to read in addition to the runtimepath
@@ -39,6 +35,14 @@
 ---@field bufnr? integer Defaults to the current buffer
 ---@field limit? integer Overrides `max_items`
 ---@field documentation? boolean Overrides the configured default
+---@field filter? fun(snippet: zsnip.Snippet): boolean Keep only the snippets this returns true for
+
+---What the three built-in sources (`zsnip.lsp`, `zsnip.blink`, `zsnip.cmp`)
+---forward to |zsnip.completion_items()|, on top of whatever their own engine
+---needs. The names match `zsnip.CompletionOpts` so they pass straight through.
+---@class zsnip.SourceOpts
+---@field limit? integer Cap on items per response (default: uncapped -- the engine filters)
+---@field documentation? boolean Attach the body as item documentation
 ---@field filter? fun(snippet: zsnip.Snippet): boolean Keep only the snippets this returns true for
 
 ---A discovered snippet file, before it is read.

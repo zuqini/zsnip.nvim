@@ -99,18 +99,13 @@ describe('completion.items', function()
     end
     registry.add('lua', snippets)
 
-    local getreg = vim.fn.getreg
-    local reads = 0
-    vim.fn.getreg = function()
-      reads = reads + 1
-      return { 'pasted' }
-    end
+    local reads, restore = helpers.stub_clipboard()
     local items = completion.items({ filetype = 'lua' })
-    vim.fn.getreg = getreg
+    restore()
 
     assert.are.equal(10, #items)
     assert.are.equal('pasted', items[1].insertText)
-    assert.are.equal(1, reads)
+    assert.are.equal(1, reads.count)
   end)
 
   it('caps the number of items', function()
