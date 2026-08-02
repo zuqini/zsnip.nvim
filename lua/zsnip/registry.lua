@@ -22,22 +22,16 @@ local M = {}
 ---@field extend table<string, string[]> Inheritance declared through the API or setup()
 ---@field inherited table<string, string[]> Inheritance declared by `extends` lines in snipmate files
 ---@field sources table<string, zsnip.Source[]>? Discovered files per language; nil until scanned
----@field read table<string, zsnip.ParsedFile> Parser output per file path
----@field parsed table<string, zsnip.Snippet[]> Normalized snippets per file path *and language*
+---@field parsed table<string, table<string, zsnip.Snippet[]>> Normalized snippets, per file path then language
 ---@field cache table<string, zsnip.Snippet[]>
 ---@field scanned_rtp string?
----@field generation integer `config.generation` the cache was resolved under
+---@field options zsnip.Config The options table `cache` was resolved under
 local state
-
----@class zsnip.ParsedFile
----@field snippets zsnip.Snippet[]
----@field extends string[]
 
 ---Drop everything derived from the filesystem. Kept separate from clear() so
 ---`:ZSnip reload` does not throw away snippets added from a user's config.
 function M.invalidate()
   state.sources = nil
-  state.read = {}
   state.parsed = {}
   state.cache = {}
   state.inherited = {}
@@ -52,11 +46,10 @@ function M.clear()
     extend = {},
     inherited = {},
     sources = nil,
-    read = {},
     parsed = {},
     cache = {},
     scanned_rtp = nil,
-    generation = config.generation,
+    options = config.options,
   }
 end
 
@@ -159,15 +152,6 @@ end
 ---does not fire for 'runtimepath', so there is nothing to hook. Reading and
 ---comparing the option costs ~0.1us.
 local function ensure_scanned()
-  -- `extend` and `global_filetype` are resolved into the per-filetype cache,
-  -- so a setup() that lands after the first lookup -- the ordinary case under
-  -- a lazy plugin manager -- has to invalidate it. Silently serving the old
-  -- answer is the worst of the options.
-  if state.generation ~= config.generation then
-    state.generation = config.generation
-    state.cache = {}
-  end
-
   local rtp = vim.o.runtimepath
   if state.sources and state.scanned_rtp == rtp then
     return
@@ -183,55 +167,56 @@ local function ensure_scanned()
 
   state.sources = sources
   state.scanned_rtp = rtp
-  state.read = {}
   state.parsed = {}
   state.cache = {}
   state.inherited = {}
 end
 
----Reading and decoding a file, which depends on nothing but its path.
----@param source zsnip.Source
----@return zsnip.ParsedFile
-local function read(source)
-  local cached = state.read[source.path]
-  if cached then
-    return cached
+---`extend` and `global_filetype` are resolved into the per-filetype cache, so
+---a setup() that lands after the first lookup -- the ordinary case under a
+---lazy plugin manager -- has to drop what was resolved under the old options.
+---setup() replaces the options table rather than editing it, so identity is
+---the whole test, and config stays unaware of who reads it.
+local function ensure_current()
+  if state.options ~= config.options then
+    state.options = config.options
+    state.cache = {}
   end
-
-  local file
-  if source.kind == 'snipmate' then
-    local snippets, extends = PARSERS.snipmate.parse(source.path)
-    file = { snippets = snippets, extends = extends }
-  else
-    file = { snippets = PARSERS.vscode.parse(source.path), extends = {} }
-  end
-
-  state.read[source.path] = file
-  return file
 end
 
----Normalizing that file's snippets *for one language*. Cached per path **and**
----language, not per path alone: normalize() stamps the language onto every
----snippet, and one VSCode file routinely covers several -- friendly-snippets'
----`global.json` serves six. Keyed on the path alone, whichever filetype was
----opened first stamps its name onto all of them.
+---Cached per path **and** language, not per path alone: normalize() stamps the
+---language onto every snippet, and one VSCode file routinely covers several --
+---friendly-snippets' `global.json` serves six. Keyed on the path alone,
+---whichever filetype was opened first stamps its name onto all of them.
+---
+---The file itself is re-read for each of those languages rather than cached
+---too: only ~1 file in 8 serves more than one, so holding every raw decode for
+---the session costs far more memory than the handful of re-reads it saves.
 ---@param source zsnip.Source
 ---@param language string
 ---@return zsnip.Snippet[]
 local function parse(source, language)
-  local key = source.path .. '\0' .. language
-  if state.parsed[key] then
-    return state.parsed[key]
+  local per_language = state.parsed[source.path]
+  if not per_language then
+    per_language = {}
+    state.parsed[source.path] = per_language
+  elseif per_language[language] then
+    return per_language[language]
   end
 
-  local file = read(source)
-  if #file.extends > 0 then
-    state.inherited[language] = vim.list_extend(state.inherited[language] or {}, file.extends)
+  local snippets, extends
+  if source.kind == 'snipmate' then
+    snippets, extends = PARSERS.snipmate.parse(source.path)
+  else
+    snippets, extends = PARSERS.vscode.parse(source.path), {}
   end
 
-  local normalized = normalize(file.snippets, language)
-  state.parsed[key] = normalized
-  return normalized
+  if #extends > 0 then
+    state.inherited[language] = vim.list_extend(state.inherited[language] or {}, extends)
+  end
+
+  per_language[language] = normalize(snippets, language)
+  return per_language[language]
 end
 
 ---@param filetype string
@@ -256,9 +241,15 @@ local function accumulate(current, addition)
   if not current or not addition then
     return current or addition
   end
-  local merged = {}
-  vim.list_extend(merged, current)
-  vim.list_extend(merged, addition)
+  local merged, seen = {}, {}
+  for _, list in ipairs({ current, addition }) do
+    for _, language in ipairs(list) do
+      if not seen[language] then
+        seen[language] = true
+        merged[#merged + 1] = language
+      end
+    end
+  end
   return merged
 end
 
@@ -311,6 +302,7 @@ end
 ---@param filetype string
 ---@return zsnip.Snippet[]
 function M.get(filetype)
+  ensure_current()
   ensure_scanned()
   if state.cache[filetype] then
     return state.cache[filetype]
@@ -351,6 +343,7 @@ end
 ---discovered, so it is an introspection call, not a hot path.
 ---@return table<string, zsnip.Snippet[]>
 function M.available()
+  ensure_current()
   ensure_scanned()
 
   local filetypes = {}
