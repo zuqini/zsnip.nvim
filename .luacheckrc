@@ -18,9 +18,10 @@ files["lua/zsnip/blink.lua"] = { ignore = { "212/self" } }
 files["lua/zsnip/cmp.lua"] = { ignore = { "212/self" } }
 
 -- The suite runs under busted (describe/it/assert globals) and writes to
--- vim.* to stage runtimepath and buffer state.
+-- vim.* to stage runtimepath and buffer state. Unused-variable warnings are
+-- left on: the suite is clean without suppressing them, and an unused require
+-- or a stub that quietly stopped being called is worth hearing about.
 files["tests"] = {
   std = "luajit+busted",
   globals = { "vim", "_G" },
-  ignore = { "21", "23" },
 }
