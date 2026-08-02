@@ -1,4 +1,5 @@
 *zsnip.txt*   Snippet collections for Neovim's built-in snippet engine
+                                                    *zsnip* *zsnip.nvim*
 
 Author:  zuqini
 License: MIT
@@ -79,7 +80,9 @@ Optional -- every default works without it. Stores options and creates
     require('zsnip').setup({
       extend = {},              -- filetype -> filetypes it inherits from
       global_filetype = 'all',  -- bucket every filetype inherits; false to disable
-      max_items = 100,          -- default cap for completion_items()
+      max_items = 100,          -- default cap for completion_items(); the
+                                -- built-in sources ask for an uncapped
+                                -- list and filter it themselves
       documentation = true,     -- attach the body as item documentation
       command = true,           -- create :ZSnip
     })
@@ -127,7 +130,7 @@ zsnip.add_snippets({filetype}, {snippets})
 A snippet is `{ prefix, body, description? }`. `body` is LSP snippet syntax,
 or a function returning it -- called each time the snippet is used, with nil
 (or a raise, or an unparseable result) meaning "skip this one". A function
-body cannot react to what is typed *into* a tabstop: |vim.snippet| owns the
+body cannot react to what is typed `into` a tabstop: |vim.snippet| owns the
 session and offers no hook for that.
 
 Snippets added here come before file-loaded ones for the same filetype, so a
@@ -178,6 +181,8 @@ Options:
     name                string    Client name (default "zsnip")
     filetypes           string[]  Attach only to these filetypes
     limit               integer   Cap on items per response (default: uncapped)
+    documentation       boolean   Attach the body as item documentation
+    filter              fun       Keep only the snippets it returns true for
     trigger_characters  string[]  Characters that make a client ask unprompted
 
 blink.cmp and nvim-cmp can receive the snippets this way too, through their

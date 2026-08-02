@@ -85,6 +85,9 @@ vim.api.nvim_create_autocmd('LspAttach', {
 })
 ```
 
+`start_lsp_server()` also takes `limit`, `documentation` and `filter`, which it
+forwards to `completion_items()` — the same three the native sources accept.
+
 `vim.lsp.completion` expands snippet items itself, and `vim.snippet` runs the
 session — nothing else is involved. Without `autotrigger`, drop
 `trigger_characters` and ask for the menu with `<C-x><C-o>`.

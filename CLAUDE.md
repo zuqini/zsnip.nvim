@@ -38,6 +38,9 @@ zsnip loads snippet collections and hands their bodies to Neovim's
   its engine at module scope: they must load on a config that does not have it.
 - `commands.lua` — the `:ZSnip` user command.
 - `health.lua` — `:checkhealth zsnip` diagnostics.
+- `util.lua` — the shared filesystem seam: every read the parsers do goes
+  through it, and every one of them is a `pcall`.
+- `types.lua` — annotations only; the module itself is empty.
 
 ## Conventions & Patterns
 

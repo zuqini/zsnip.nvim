@@ -78,8 +78,22 @@ vim.pack.add({
 })
 
 -- lazy.nvim / zpack.nvim
-{ 'zuqini/ZSnip.nvim', dependencies = { 'rafamadriz/friendly-snippets' } }
+{
+  'zuqini/ZSnip.nvim',
+  dependencies = { 'rafamadriz/friendly-snippets' },
+  config = function()
+    require('zsnip').setup()
+    require('zsnip.loaders.from_vscode').lazy_load()
+    require('zsnip.loaders.from_snipmate').lazy_load()
+    -- Then one of the three ways to offer them; see Wiring, below.
+    require('zsnip').start_lsp_server()
+  end,
+}
 ```
+
+Registering a loader is what gives zsnip anything to find, so a spec with no
+`config` installs a plugin that does nothing. It still reads nothing at
+startup -- `lazy_load()` only records where to look.
 
 ## Quick start
 
@@ -199,7 +213,8 @@ vim.keymap.set({ 'i', 's' }, '<C-j>', function() require('zsnip').jump(-1) end)
 require('zsnip').setup({
   extend = {},              -- filetype -> filetypes it inherits from
   global_filetype = 'all',  -- bucket every filetype inherits; false to disable
-  max_items = 100,          -- default cap for completion_items()
+  max_items = 100,          -- default cap for completion_items(); the built-in
+                            -- sources ask for an uncapped list and filter it
   documentation = true,     -- attach the body as item documentation
   command = true,           -- create :ZSnip
 })

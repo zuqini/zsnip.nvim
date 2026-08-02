@@ -11,9 +11,9 @@ requires `setup()` to have run — it only stores options and creates `:ZSnip`.
 | --- | --- | --- | --- |
 | `extend` | `table<string, string\|string[]>` | `{}` | Filetype inheritance |
 | `global_filetype` | `string\|false` | `'all'` | Bucket every filetype inherits from |
-| `max_items` | `integer` | `100` | Default cap for `completion_items()` |
+| `max_items` | `integer` | `100` | Default cap for `completion_items()`. The three built-in sources ask for an uncapped list so their engine can filter it, so this applies only to your own calls |
 | `documentation` | `boolean` | `true` | Attach the body as item documentation |
-| `command` | `boolean` | `true` | Create the `:ZSnip` command |
+| `command` | `boolean` | `true` | Create the [`:ZSnip`](#the-zsnip-command) command |
 
 ### `zsnip.loaders.from_vscode.lazy_load(opts?)` / `.load(opts?)`
 ### `zsnip.loaders.from_snipmate.lazy_load(opts?)` / `.load(opts?)`
@@ -142,6 +142,8 @@ buffer that gets a filetype. Idempotent.
 | `name` | `string` | Client name as it appears in `:checkhealth lsp` (default `'zsnip'`) |
 | `filetypes` | `string[]` | Attach only to these filetypes |
 | `limit` | `integer` | Cap on items per response (default: uncapped) |
+| `documentation` | `boolean` | Attach the body as item documentation |
+| `filter` | `fun(snippet): boolean` | Keep only the snippets it returns true for |
 | `trigger_characters` | `string[]` | Characters that make a client ask unprompted (default: none) |
 
 The whole filetype is returned in one uncut list (`isIncomplete = false`),
@@ -149,6 +151,16 @@ which is what lets the client do its own filtering and ranking.
 
 `require('zsnip.lsp').server(opts)` returns the `cmd` function on its own, for
 wiring the server up by hand.
+
+### The `:ZSnip` command
+
+Created by `setup()` unless `command = false`.
+
+| Subcommand | Does |
+| --- | --- |
+| `:ZSnip` / `:ZSnip expand` | Pick a snippet for the current filetype with `vim.ui.select` and expand it |
+| `:ZSnip list` | Open a scratch buffer listing every snippet the filetype has, with the filetype each came from — the question inheritance and the global bucket make hard to eyeball |
+| `:ZSnip reload` | Forget everything read from disk; the next lookup rescans. Snippets added through `add_snippets()` survive |
 
 ### `zsnip.blink`
 

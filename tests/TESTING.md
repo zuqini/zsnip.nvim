@@ -51,7 +51,10 @@ nvim -u NONE -l tests/busted.lua --shuffle
 | `snipmate_parser_test.lua` | `.snippets` files: indentation, blank lines, `extends`, escaping |
 | `registry_test.lua` | Discovery, laziness, inheritance, shadowing, runtimepath invalidation |
 | `completion_test.lua` | Completion-item shape, deduplication, fuzzy matching, limits |
-| `lsp_test.lua` | The in-process server's initialize and completion responses |
+| `lsp_test.lua` | The in-process server's initialize, completion, reply and exit handling, plus `lsp.start()` attachment |
+| `sources_test.lua` | The blink.cmp and nvim-cmp sources, including that neither requires its engine at module scope |
+| `commands_test.lua` | `:ZSnip` dispatch, completion, the picker, the list buffer and reload |
+| `health_test.lua` | Every `:checkhealth zsnip` section, against a recording `vim.health` stub |
 | `api_test.lua` | Trigger matching, expansion, session wrappers, the public surface |
 
 ## Test Environment
@@ -91,7 +94,7 @@ Assertions come from busted's bundled [luassert](https://github.com/lunarmodules
 
 ## Notes
 
-- CI runs the suite on Neovim 0.11.0, 0.12.0 and nightly on every push and
-  pull request; see `.github/workflows/tests.yml`. CI's LuaRocks is already
+- CI runs the suite on Neovim 0.11.0, 0.12.0 and nightly on every push to
+  `main` and every pull request; see `.github/workflows/tests.yml`. CI's LuaRocks is already
   bound to LuaJIT, so it installs busted with just
   `luarocks install --tree .luarocks busted 2.3.0`.
