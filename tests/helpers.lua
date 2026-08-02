@@ -64,6 +64,42 @@ function M.vscode_pack(files)
   return dir
 end
 
+---A VSCode package contributing one file to several languages at once, the
+---shape friendly-snippets uses for its shared packs (`global.json` covers six).
+---@param languages string[]
+---@param definitions table<string, table>
+---@return string dir
+function M.vscode_shared_pack(languages, definitions)
+  local dir = M.tempdir()
+  M.write(dir .. '/snippets/shared.json', vim.json.encode(definitions))
+  M.write(
+    dir .. '/package.json',
+    vim.json.encode({
+      contributes = { snippets = { { language = languages, path = './snippets/shared.json' } } },
+    })
+  )
+  return dir
+end
+
+---A package whose snippet file is valid JSON but holds values a pack is not
+---supposed to hold. Written as raw text: vim.json.encode cannot produce a
+---null inside an array.
+---@param language string
+---@param json string
+---@return string dir
+function M.vscode_raw_pack(language, json)
+  local dir = M.tempdir()
+  local name = ('snippets/%s.json'):format(language)
+  M.write(dir .. '/' .. name, json)
+  M.write(
+    dir .. '/package.json',
+    vim.json.encode({
+      contributes = { snippets = { { language = language, path = './' .. name } } },
+    })
+  )
+  return dir
+end
+
 ---A snipmate directory: `snippets/<filetype>.snippets` per entry.
 ---@param files table<string, string> filetype -> file contents
 ---@return string dir
@@ -88,6 +124,23 @@ end
 function M.reset()
   require('zsnip.registry').clear()
   require('zsnip.config').reset()
+end
+
+---Stop the in-process server and forget it was ever started.
+---
+---Waiting for the client to actually go is the point: vim.lsp.start() reuses a
+---client by name, so a still-stopping one from an earlier test is handed back
+---to the next and never attaches to anything.
+function M.stop_lsp()
+  for _, client in ipairs(vim.lsp.get_clients()) do
+    if vim.startswith(client.name, 'zsnip') then
+      client:stop(true)
+    end
+  end
+  vim.wait(2000, function()
+    return #vim.lsp.get_clients() == 0
+  end)
+  pcall(vim.api.nvim_del_augroup_by_name, 'zsnip.lsp')
 end
 
 ---Undo runtimepath changes and delete every temp directory; call from
