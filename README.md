@@ -1,4 +1,4 @@
-<h1 align="center">zsnip.nvim</h1>
+<h1 align="center">ZSnip.nvim</h1>
 <div align="center">
   <img src="https://img.shields.io/github/actions/workflow/status/zuqini/ZSnip.nvim/tests.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=tests&labelColor=1e1b4b"> <img src="https://img.shields.io/github/issues/zuqini/ZSnip.nvim?style=for-the-badge&logo=github&logoColor=white&color=8b5cf6&labelColor=1e1b4b"> <img src="https://img.shields.io/github/last-commit/zuqini/ZSnip.nvim?style=for-the-badge&logo=neovim&color=8b5cf6&labelColor=1e1b4b"> <img src="https://img.shields.io/github/license/zuqini/ZSnip.nvim?style=for-the-badge&logo=opensourceinitiative&logoColor=white&color=8b5cf6&labelColor=1e1b4b">
 </div>
