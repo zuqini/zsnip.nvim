@@ -67,11 +67,16 @@ leaves the process.
 No completion plugin needed:
 
 ```lua
--- vim.lsp.completion decides when to ask from the server's trigger
--- characters, so a keyword-triggered source has to name them.
-require('zsnip').start_lsp_server({
-  trigger_characters = vim.split('abcdefghijklmnopqrstuvwxyz_', ''),
-})
+-- vim.lsp.completion only asks on the characters a server names, and a
+-- snippet trigger can begin with any of them: `2x1table` and `#!` are both
+-- real friendly-snippets triggers, so a letters-only list would leave the
+-- first firing a keystroke late and the second never firing at all.
+local triggers = {}
+for byte = 33, 126 do
+  triggers[#triggers + 1] = string.char(byte)
+end
+
+require('zsnip').start_lsp_server({ trigger_characters = triggers })
 
 vim.api.nvim_create_autocmd('LspAttach', {
   callback = function(args)

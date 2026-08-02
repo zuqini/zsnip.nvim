@@ -129,11 +129,16 @@ require('cmp').setup({
 server, which every LSP-speaking menu already knows how to consume:
 
 ```lua
-require('zsnip').start_lsp_server({
-  -- vim.lsp.completion decides when to ask from these; blink and nvim-cmp
-  -- ask on every keystroke of their own accord and do not need them.
-  trigger_characters = vim.split('abcdefghijklmnopqrstuvwxyz_', ''),
-})
+-- vim.lsp.completion only asks on the characters a server names, and a
+-- trigger can begin with any of them -- `2x1table` and `#!` are real
+-- friendly-snippets triggers -- so name every printable one. blink and
+-- nvim-cmp ask on their own cadence and need none of this.
+local triggers = {}
+for byte = 33, 126 do
+  triggers[#triggers + 1] = string.char(byte)
+end
+
+require('zsnip').start_lsp_server({ trigger_characters = triggers })
 
 vim.api.nvim_create_autocmd('LspAttach', {
   callback = function(args)
