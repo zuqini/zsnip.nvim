@@ -14,7 +14,7 @@ jobs:
       # others and hide whether they would have passed.
       fail-fast: false
       matrix:
-        neovim-version: ['v0.11.0', 'v0.12.0', 'nightly']
+        neovim-version: ['v0.12.0', 'nightly']
 
     steps:
       - name: Checkout code

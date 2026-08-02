@@ -87,9 +87,23 @@ describe(':checkhealth zsnip', function()
   it('says whether the LSP server is serving them', function()
     assert.is_true(mentions(check().info, 'LSP server not started'))
 
+    local bufnr = vim.api.nvim_create_buf(false, true)
+    vim.bo[bufnr].filetype = 'lua'
     require('zsnip.lsp').start()
-    assert.is_true(mentions(check().ok, 'LSP server started'))
+    assert.is_true(mentions(check().ok, 'LSP server started, and a client is running'))
 
+    helpers.stop_lsp()
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  -- Registered is not the same as serving: `started()` stays true across a
+  -- :LspStop, so reporting it as "the menus can see the snippets" would be a
+  -- clean bill of health for a server that is gone.
+  it('does not call a stopped server healthy', function()
+    require('zsnip.lsp').start()
+    helpers.stop_lsp_clients()
+
+    assert.is_true(mentions(check().warn, 'no client is running'))
     helpers.stop_lsp()
   end)
 end)

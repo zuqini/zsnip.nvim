@@ -19,7 +19,7 @@ local M = {}
 ---@field filetypes? string[] Attach only to these filetypes (default: all)
 ---@field limit? integer Cap on items per response (default: uncapped)
 ---@field documentation? boolean Attach the body as item documentation
----@field filter? fun(snippet: zsnip.Snippet): boolean
+---@field filter? fun(snippet: zsnip.Snippet): boolean Keep only the snippets it returns true for
 ---@field trigger_characters? string[] Characters that make a client ask unprompted (default: none)
 
 ---What |vim.lsp.start()| expects back from a `cmd` function. Declared here
@@ -65,13 +65,14 @@ local function server(opts)
     end
 
     return {
-      ---`notify_reply` is how a client learns the request is done -- it is the
-      ---only thing that clears the entry |vim.lsp.Client:request()| registers,
-      ---and it fires an LspRequest autocmd either way. Answering without it
-      ---leaves one 'pending' request behind per completion, forever, which
-      ---under `autotrigger` is one per keystroke. Calling it before returning
-      ---also tells the client we resolved synchronously, so it never registers
-      ---the request at all.
+      ---`notify_reply` is how a client learns the request is done. Answering
+      ---without it leaves one 'pending' entry behind per completion, forever --
+      ---under `autotrigger`, one per keystroke. Calling it before returning
+      ---also tells |vim.lsp.Client:request()| we resolved synchronously, so it
+      ---never registers the request at all. That second half is why the floor
+      ---is 0.12: before the `already_responded` guard landed in 0.11.2 the
+      ---client registered the entry *after* rpc.request() returned, so this
+      ---cleared nothing and logged an error for every reply instead.
       request = function(method, params, callback, notify_reply)
         request_id = request_id + 1
         local id = request_id
@@ -132,6 +133,8 @@ end
 
 ---@type integer?
 local augroup = nil
+---@type string?
+local client_name = nil
 
 ---Start the server and attach it to every buffer that gets a filetype.
 ---Idempotent: calling it again replaces the autocmd rather than stacking one.
@@ -152,6 +155,7 @@ function M.start(opts)
     vim.lsp.start({ name = name, cmd = cmd }, { bufnr = bufnr })
   end
 
+  client_name = name
   augroup = vim.api.nvim_create_augroup('zsnip.lsp', { clear = true })
   vim.api.nvim_create_autocmd('FileType', {
     group = augroup,
@@ -168,9 +172,19 @@ function M.start(opts)
   end
 end
 
+---Whether |zsnip.start_lsp_server()| has installed the autocmd that attaches
+---the server to new buffers.
 ---@return boolean
 function M.started()
   return augroup ~= nil
+end
+
+---Whether a client is actually up. Registered is not the same as serving: a
+---`filetypes` list that excluded every buffer opened so far, or a `:LspStop`,
+---leaves the autocmd in place with nothing behind it.
+---@return boolean
+function M.running()
+  return client_name ~= nil and #vim.lsp.get_clients({ name = client_name }) > 0
 end
 
 return M

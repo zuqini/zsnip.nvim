@@ -114,6 +114,10 @@ local items = require('zsnip').completion_items({
 Feed them to `vim.fn.complete()`, to `vim.lsp.completion`'s handler, or into
 whatever menu you assemble yourself.
 
+Passing `prefix` makes zsnip fuzzy-match and rank, and it then sets `sortText`
+to pin the order. Omit it to get the whole filetype unranked and with no
+`sortText`, which is what you want if your menu ranks for itself.
+
 ## Without a completion menu at all
 
 Bind the trigger expansion directly:

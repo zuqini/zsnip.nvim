@@ -42,7 +42,12 @@ nvim -u NONE -l tests/busted.lua --shuffle
 - `tests/*_test.lua` — native busted spec files, discovered through the
   `.busted` pattern.
 - `tests/helpers.lua` — throwaway snippet packages on a throwaway
-  runtimepath, plus the `assert.contains` assertion.
+  runtimepath, plus the `assert.contains` assertion. Two helpers have a
+  contract worth knowing: `stop_lsp()` *waits* for the client to actually go
+  (`vim.lsp.start()` reuses a client by name, so a still-stopping one gets
+  handed to the next test and attaches to nothing), and `stub_clipboard()`
+  replaces `vim.fn.getreg` because a headless runner has no clipboard
+  provider — its `reads.count` is what the batching specs assert on.
 
 | Spec | Covers |
 | --- | --- |
@@ -94,7 +99,7 @@ Assertions come from busted's bundled [luassert](https://github.com/lunarmodules
 
 ## Notes
 
-- CI runs the suite on Neovim 0.11.0, 0.12.0 and nightly on every push to
-  `main` and every pull request; see `.github/workflows/tests.yml`. CI's LuaRocks is already
-  bound to LuaJIT, so it installs busted with just
+- CI runs the suite on Neovim 0.12.0 and nightly on every push to `main` and
+  every pull request; see `.github/workflows/tests.yml`. CI's LuaRocks is
+  already bound to LuaJIT, so it installs busted with just
   `luarocks install --tree .luarocks busted 2.3.0`.

@@ -65,7 +65,7 @@ What that leaves zsnip to do, it does completely:
 
 ## Requirements
 
-- Neovim 0.11.0+
+- Neovim 0.12.0+
 - A snippet collection, e.g. [friendly-snippets](https://github.com/rafamadriz/friendly-snippets)
 
 ## Installation
@@ -93,7 +93,7 @@ vim.pack.add({
 
 Registering a loader is what gives zsnip anything to find, so a spec with no
 `config` installs a plugin that does nothing. It still reads nothing at
-startup -- `lazy_load()` only records where to look.
+startup — `lazy_load()` only records where to look.
 
 ## Quick start
 
@@ -228,8 +228,9 @@ require('zsnip').setup({
 | `:ZSnip list` | Show every snippet the current filetype has, and where each came from |
 | `:ZSnip reload` | Forget everything read from disk and rescan |
 
-`:checkhealth zsnip` reports the engine, the registered loaders and how much
-was actually found.
+`:checkhealth zsnip` reports the engine, the registered loaders, how much was
+actually found, and whether anything is serving it — a snippet that was found
+still needs one of the three wirings below to reach a menu.
 
 ## Coming from LuaSnip
 

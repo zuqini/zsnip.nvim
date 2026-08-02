@@ -40,8 +40,8 @@ jobs:
         with:
           neovim: true
           # The floor zsnip supports: type-checking against a newer runtime
-          # would pass a 0.12-only API that breaks on the version we claim.
-          version: v0.11.0
+          # would pass a 0.13-only API that breaks on the version we claim.
+          version: v0.12.0
 
       - name: Install lua-language-server
         run: |

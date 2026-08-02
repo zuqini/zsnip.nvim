@@ -1,5 +1,6 @@
 ---Shared test scaffolding: throwaway snippet packages on a throwaway
----runtimepath, plus the `assert.contains` assertion.
+---runtimepath, stubs for the things a headless runner has no real version of,
+---and the `assert.contains` assertion.
 
 local luassert = require('luassert')
 local say = require('say')
@@ -120,18 +121,37 @@ function M.use_rtp(...)
   vim.o.runtimepath = table.concat({ ... }, ',') .. ',' .. vim.o.runtimepath
 end
 
+---Stub the '+' register for the duration of a test. Stubbed rather than
+---written to: a headless CI runner has no clipboard provider, so '+' reads
+---back empty there. `reads.count` is how often it was asked -- the number a
+---shared resolver is supposed to hold down to one.
+---@param contents? string
+---@return { count: integer } reads, fun() restore
+function M.stub_clipboard(contents)
+  local getreg = vim.fn.getreg
+  local reads = { count = 0 }
+  vim.fn.getreg = function()
+    reads.count = reads.count + 1
+    return { contents or 'pasted' }
+  end
+  return reads, function()
+    vim.fn.getreg = getreg
+  end
+end
+
 ---Fresh registry and config; call from before_each.
 function M.reset()
   require('zsnip.registry').clear()
   require('zsnip.config').reset()
 end
 
----Stop the in-process server and forget it was ever started.
+---Stop every zsnip client, leaving the autocmd that starts them in place --
+---the state a `:LspStop` leaves behind.
 ---
 ---Waiting for the client to actually go is the point: vim.lsp.start() reuses a
 ---client by name, so a still-stopping one from an earlier test is handed back
 ---to the next and never attaches to anything.
-function M.stop_lsp()
+function M.stop_lsp_clients()
   for _, client in ipairs(vim.lsp.get_clients()) do
     if vim.startswith(client.name, 'zsnip') then
       client:stop(true)
@@ -140,6 +160,11 @@ function M.stop_lsp()
   vim.wait(2000, function()
     return #vim.lsp.get_clients() == 0
   end)
+end
+
+---Stop the in-process server and forget it was ever started.
+function M.stop_lsp()
+  M.stop_lsp_clients()
   pcall(vim.api.nvim_del_augroup_by_name, 'zsnip.lsp')
 end
 

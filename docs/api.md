@@ -71,6 +71,10 @@ carries a `filetype` field naming where it came from.
 Every filetype zsnip knows snippets for, mapped to them. Parses everything
 discovered, so it is an introspection call, not a hot path.
 
+Both this and `get()` hand back a list you may sort and filter freely. The
+snippets *in* it are not copies, and deliberately so — an entry from here is
+what `expand_snippet()` expects back.
+
 ### `zsnip.completion_items(opts?)` → `lsp.CompletionItem[]`
 
 | Option | Type | Meaning |
@@ -89,6 +93,11 @@ into a menu that already holds LSP items wants.
 Items carry `insertTextFormat = Snippet` and a resolved `insertText`, so a
 client expands them with no further work. One item per trigger — the first
 occurrence in shadowing order wins.
+
+`sortText` is set only when `prefix` was given, i.e. when zsnip did the
+ranking. Without it the order is whichever order the packs were read in, and
+pinning a client to that would stop it applying the ranking it does better;
+the three built-in sources rely on that and pass no `prefix`.
 
 ### `zsnip.resolve(body)` → `string`
 
@@ -159,7 +168,7 @@ Created by `setup()` unless `command = false`.
 | Subcommand | Does |
 | --- | --- |
 | `:ZSnip` / `:ZSnip expand` | Pick a snippet for the current filetype with `vim.ui.select` and expand it |
-| `:ZSnip list` | Open a scratch buffer listing every snippet the filetype has, with the filetype each came from — the question inheritance and the global bucket make hard to eyeball |
+| `:ZSnip list` | Open a scratch buffer listing every snippet the filetype has, with the filetype each came from — which inheritance and the global bucket otherwise make hard to eyeball |
 | `:ZSnip reload` | Forget everything read from disk; the next lookup rescans. Snippets added through `add_snippets()` survive |
 
 ### `zsnip.blink`

@@ -1,8 +1,8 @@
 ---:checkhealth zsnip — diagnostics for a zsnip setup.
 ---
----Answers the two questions a broken snippet setup raises: is the engine
----there, and did any snippets actually get found. Discovered automatically by
----`:checkhealth zsnip` — nothing registers it.
+---Answers the three questions a broken snippet setup raises: is the engine
+---there, did any snippets actually get found, and is anything serving them.
+---Discovered automatically by `:checkhealth zsnip` — nothing registers it.
 
 local registry = require('zsnip.registry')
 
@@ -19,10 +19,10 @@ local MINIMAL_CONFIG = table.concat({
 local function check_environment()
   vim.health.start('Environment')
 
-  if vim.fn.has('nvim-0.11') == 1 then
-    vim.health.ok('Neovim ' .. tostring(vim.version()) .. ' (>= 0.11.0 required)')
+  if vim.fn.has('nvim-0.12') == 1 then
+    vim.health.ok('Neovim ' .. tostring(vim.version()) .. ' (>= 0.12.0 required)')
   else
-    vim.health.error('Neovim 0.11.0+ is required')
+    vim.health.error('Neovim 0.12.0+ is required')
   end
 
   if type(vim.snippet) == 'table' and type(vim.snippet.expand) == 'function' then
@@ -60,24 +60,6 @@ local function check_loaders()
   vim.health.ok('loaders: ' .. table.concat(enabled, ', '))
 end
 
----A found snippet still has to reach a menu, and the three ways of arranging
----that are mutually exclusive. Which one is running is the other half of "why
----do I see no snippets", and nothing else reports it.
-local function check_sources()
-  vim.health.start('Completion sources')
-
-  if require('zsnip.lsp').started() then
-    vim.health.ok('LSP server started — every LSP-speaking menu can see the snippets')
-  else
-    vim.health.info(table.concat({
-      'LSP server not started. That is correct if you registered a native',
-      'source instead (zsnip.blink or zsnip.cmp) — running both offers every',
-      "snippet twice. If you registered neither, nothing is serving them:",
-      "  require('zsnip').start_lsp_server()",
-    }, '\n'))
-  end
-end
-
 local function check_snippets()
   vim.health.start('Snippets')
 
@@ -102,6 +84,33 @@ local function check_snippets()
   if filetype ~= '' then
     vim.health.info(('current filetype (%s): %d snippet(s)'):format(filetype, #registry.get(filetype)))
   end
+end
+
+---A found snippet still has to reach a menu, and the three ways of arranging
+---that are mutually exclusive. Which one is running is the other half of "why
+---do I see no snippets", and nothing else reports it.
+local function check_sources()
+  vim.health.start('Completion sources')
+
+  local lsp = require('zsnip.lsp')
+  if not lsp.started() then
+    vim.health.info(table.concat({
+      'LSP server not started. That is correct if you registered a native',
+      'source instead (zsnip.blink or zsnip.cmp) — running both offers every',
+      'snippet twice. If you registered neither, nothing is serving them:',
+      "  require('zsnip').start_lsp_server()",
+    }, '\n'))
+    return
+  end
+
+  if lsp.running() then
+    vim.health.ok('LSP server started, and a client is running')
+    return
+  end
+  vim.health.warn('LSP server started, but no client is running', {
+    'Nothing is serving snippets right now. Either every buffer opened so far',
+    'was excluded by the `filetypes` option, or the client was stopped.',
+  })
 end
 
 local function check_bug_report()

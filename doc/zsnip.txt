@@ -1,5 +1,5 @@
 *zsnip.txt*   Snippet collections for Neovim's built-in snippet engine
-                                                    *zsnip* *zsnip.nvim*
+                                                          *zsnip* *zsnip.nvim*
 
 Author:  zuqini
 License: MIT
@@ -48,7 +48,7 @@ What zsnip adds on top of the engine:
 ==============================================================================
 2. REQUIREMENTS                                            *zsnip-requirements*
 
-- Neovim 0.11.0 or newer
+- Neovim 0.12.0 or newer
 - A snippet collection, e.g. rafamadriz/friendly-snippets
 
 ==============================================================================
@@ -302,6 +302,14 @@ opinion about <Tab>.
 Reports the Neovim version, whether |vim.snippet| and the snippet grammar are
 available, which loaders are registered, and how many snippets were actually
 found.
+
+The last section, "Completion sources", answers the other half of "why do I
+see no snippets": a snippet that was found still has to reach a menu. It
+reports whether |zsnip.start_lsp_server()| has been called, and whether a
+client is actually running -- a `filetypes` list that excluded every buffer,
+or a `:LspStop`, leaves the server registered but serving nothing. If you
+registered a native source (`zsnip.blink` or `zsnip.cmp`) instead, no LSP
+server is the correct state.
 
 ==============================================================================
 11. COMING FROM LUASNIP                                         *zsnip-luasnip*
