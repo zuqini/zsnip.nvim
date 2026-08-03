@@ -22,6 +22,7 @@ local M = {}
 
 ---@class zsnip.CompleteOpts : zsnip.SourceOpts
 ---@field complete? boolean Add the source to 'complete' (default true). False when the caller sets the option itself.
+---@field expand? fun(body: string) Expands the accepted snippet (default vim.snippet.expand). For a caller whose user chooses the engine somewhere else.
 
 ---What goes in 'complete'. `v:lua` resolves the require at call time, so the
 ---option can be set before this module has loaded. No comma or space in it,
@@ -134,7 +135,8 @@ local function expand()
     return
   end
   vim.api.nvim_buf_set_text(0, row - 1, start, row - 1, col, {})
-  vim.snippet.expand(data.body)
+  local expand_body = options.expand or vim.snippet.expand
+  expand_body(data.body)
 end
 
 ---What to put in 'complete' to serve snippets, for a caller that sets the

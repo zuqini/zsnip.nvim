@@ -224,6 +224,24 @@ describe('the complete source expanding an accepted item', function()
 
     assert.are.same({ "require 'mod'" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
   end)
+
+  -- A caller whose user chose a different engine passes it in; the trigger
+  -- is already deleted by the time it runs.
+  it('expands through the expand a caller handed enable()', function()
+    local expanded
+    lua_buffer()
+    complete.enable({
+      complete = false,
+      expand = function(body)
+        expanded = body
+      end,
+    })
+    accept('req', "require '${1:mod}'")
+
+    assert.are.equal("require '${1:mod}'", expanded)
+    assert.are.same({ '' }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+    assert.is_false(vim.snippet.active())
+  end)
 end)
 
 describe('the complete source and its options', function()

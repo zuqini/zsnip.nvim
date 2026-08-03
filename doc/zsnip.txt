@@ -296,6 +296,10 @@ uncapped, since nothing downstream trims what this source returns.
 the preview window, and disable() undoes both halves of enable(). It deliberately leaves
 'autocomplete' alone -- whether the menu opens by itself is your decision.
 
+An `expand` function replaces |vim.snippet.expand()| as what turns the
+accepted body into a session -- for a caller whose user chose a different
+engine somewhere else. The trigger is already deleted by the time it runs.
+
 Two things are specific to this path. zsnip does the matching, returning
 `refresh = "always"` so it is re-asked on every change; add `fuzzy` to
 'completeopt' if you want Vim's own narrowing to agree with zsnip's. And zsnip
