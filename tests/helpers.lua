@@ -65,6 +65,18 @@ function M.vscode_pack(files)
   return dir
 end
 
+---A directory of loose snippet files with no package.json -- the way VSCode
+---keeps a user's own, and what `lazy_load { paths = ... }` is pointed at.
+---@param files table<string, table> filename -> snippet definitions
+---@return string dir
+function M.standalone_dir(files)
+  local dir = M.tempdir()
+  for name, definitions in pairs(files) do
+    M.write(dir .. '/' .. name, vim.json.encode(definitions))
+  end
+  return dir
+end
+
 ---A VSCode package contributing one file to several languages at once, the
 ---shape friendly-snippets uses for its shared packs (`global.json` covers six).
 ---@param languages string[]

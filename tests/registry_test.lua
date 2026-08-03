@@ -14,6 +14,77 @@ describe('registry discovery', function()
     assert.are.same({ 'req' }, helpers.prefixes(registry.get('lua')))
   end)
 
+  -- What the docs have always told people to do -- "point a loader at a
+  -- directory" -- with the directory VSCode itself writes: no package.json,
+  -- just files named after the filetype they serve.
+  it('finds <language>.json in a directory with no manifest', function()
+    local dir = helpers.standalone_dir({
+      ['python.json'] = { main = { prefix = 'ifmain', body = "if __name__ == '__main__':\n\t$0" } },
+      ['lua.json'] = { req = { prefix = 'req', body = "require '$1'" } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({ 'ifmain' }, helpers.prefixes(registry.get('python')))
+    assert.are.same({ 'req' }, helpers.prefixes(registry.get('lua')))
+  end)
+
+  it('splits a .code-snippets file by each snippet scope', function()
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = {
+        log = { scope = 'javascript, typescript', prefix = 'clg', body = 'console.log($1)' },
+        pyd = { scope = 'python', prefix = 'def', body = 'def $1():' },
+      },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({ 'clg' }, helpers.prefixes(registry.get('javascript')))
+    assert.are.same({ 'clg' }, helpers.prefixes(registry.get('typescript')))
+    assert.are.same({ 'def' }, helpers.prefixes(registry.get('python')))
+  end)
+
+  -- One file, several languages: the filetype stamped on each copy has to be
+  -- the one that asked, not whichever opened first.
+  it('stamps each scope with its own filetype', function()
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = {
+        log = { scope = 'javascript,typescript', prefix = 'clg', body = 'b' },
+      },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.equal('javascript', registry.get('javascript')[1].filetype)
+    assert.are.equal('typescript', registry.get('typescript')[1].filetype)
+  end)
+
+  it('gives an unscoped .code-snippets entry to every filetype', function()
+    local dir = helpers.standalone_dir({
+      ['global.code-snippets'] = { todo = { prefix = 'todo', body = 'TODO: $1' } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({ 'todo' }, helpers.prefixes(registry.get('rust')))
+    assert.are.same({ 'todo' }, helpers.prefixes(registry.get('haskell')))
+  end)
+
+  -- A manifest is still the authority for the files it names; globbing beside
+  -- it must not offer the same file a second time under a name from disk.
+  it('does not double up a file a package.json already claimed', function()
+    local dir = helpers.vscode_pack({ lua = { req = { prefix = 'req', body = 'b' } } })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({ 'req' }, helpers.prefixes(registry.get('lua')))
+  end)
+
+  it('leaves loose files alone on the runtimepath', function()
+    local dir = helpers.standalone_dir({
+      ['lua.json'] = { req = { prefix = 'req', body = 'b' } },
+    })
+    helpers.use_rtp(dir)
+    require('zsnip.loaders.from_vscode').lazy_load()
+
+    assert.are.same({}, helpers.prefixes(registry.get('lua')))
+  end)
+
   it('finds snipmate files on the runtimepath', function()
     helpers.use_rtp(helpers.snipmate_pack({ pkl = 'snippet cls\n\tclass $1 {}' }))
     require('zsnip.loaders.from_snipmate').lazy_load()

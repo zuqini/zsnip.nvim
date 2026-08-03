@@ -102,6 +102,47 @@ local function record(sources, language, source)
   table.insert(sources[language], source)
 end
 
+---Snippet files sitting loose in a directory, the way VSCode keeps a user's
+---own: `<language>.json` named after the filetype it serves, and
+---`*.code-snippets` whose snippets name their languages individually. Only
+---looked for under a configured `paths` -- a plugin on the runtimepath
+---declares what it contributes in a package.json, and globbing every plugin's
+---directory for stray JSON would find a great deal that is not a snippet.
+---@param sources table<string, zsnip.Source[]>
+---@param opts zsnip.LoaderOpts
+---@param dir string
+---@param claimed table<string, true> Paths a package.json already spoke for
+local function scan_standalone(sources, opts, dir, claimed)
+  local function keep(language, path)
+    if wanted(opts, language) then
+      record(sources, language, { kind = 'vscode', path = path })
+    end
+  end
+
+  for _, path in ipairs(vim.fn.glob(dir .. '/*.json', true, true)) do
+    path = vim.fs.normalize(path)
+    if vim.fs.basename(path) ~= 'package.json' and not claimed[path] then
+      keep(vim.fn.fnamemodify(path, ':t:r'), path)
+    end
+  end
+
+  for _, path in ipairs(vim.fn.glob(dir .. '/*.code-snippets', true, true)) do
+    path = vim.fs.normalize(path)
+    if not claimed[path] then
+      local languages, unscoped = PARSERS.vscode.scopes(path)
+      for _, language in ipairs(languages) do
+        keep(language, path)
+      end
+      -- An unscoped snippet applies to every language, which is what the
+      -- global bucket already means here.
+      local global = config.options.global_filetype
+      if unscoped and global then
+        keep(global, path)
+      end
+    end
+  end
+end
+
 ---@param sources table<string, zsnip.Source[]>
 ---@param opts zsnip.LoaderOpts
 local function scan_vscode(sources, opts)
@@ -110,12 +151,18 @@ local function scan_vscode(sources, opts)
     manifests[#manifests + 1] = vim.fs.normalize(path) .. '/package.json'
   end
 
+  local claimed = {}
   for _, manifest in ipairs(manifests) do
     for _, entry in ipairs(PARSERS.vscode.contributions(manifest)) do
+      claimed[entry.path] = true
       if wanted(opts, entry.language) then
         record(sources, entry.language, { kind = 'vscode', path = entry.path })
       end
     end
+  end
+
+  for _, dir in ipairs(util.list(opts.paths)) do
+    scan_standalone(sources, opts, vim.fs.normalize(dir), claimed)
   end
 end
 
@@ -181,6 +228,10 @@ local function ensure_current()
   if state.options ~= config.options then
     state.options = config.options
     state.cache = {}
+    -- Discovery reads `global_filetype` too, to decide which bucket an
+    -- unscoped `.code-snippets` entry belongs to, so what was found under the
+    -- old options has to go with what was resolved from it.
+    state.sources = nil
   end
 end
 
@@ -208,7 +259,9 @@ local function parse(source, language)
   if source.kind == 'snipmate' then
     snippets, extends = PARSERS.snipmate.parse(source.path)
   else
-    snippets, extends = PARSERS.vscode.parse(source.path), {}
+    -- The language is passed on so a `.code-snippets` file, which is one file
+    -- serving several, hands back only what is in scope for this one.
+    snippets, extends = PARSERS.vscode.parse(source.path, language), {}
   end
 
   if #extends > 0 then

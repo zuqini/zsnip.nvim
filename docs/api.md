@@ -28,9 +28,21 @@ over the runtimepath.
 | `include` | `string[]` | Only load these languages |
 | `exclude` | `string[]` | Load every language except these |
 
-A VSCode `path` is a directory containing a `package.json`. A snipmate `path`
-is a directory containing `*.snippets` files, or per-filetype directories of
-them.
+A snipmate `path` is a directory containing `*.snippets` files, or per-filetype
+directories of them.
+
+A VSCode `path` is a directory containing a `package.json`, **or** one holding
+loose snippet files the way VSCode keeps a user's own — so
+`~/.config/Code/User/snippets` works as-is:
+
+| File | Serves |
+| --- | --- |
+| `<language>.json` | the filetype it is named after |
+| `*.code-snippets` | the languages each snippet's `scope` names, comma-separated; an unscoped entry reaches every filetype via `global_filetype` |
+| `package.json` | still decides when present; files it names are not read again from the glob |
+
+Loose files are only looked for under a configured `path`, never on the
+runtimepath — a plugin there declares what it contributes in a `package.json`.
 
 Calls merge, so two `lazy_load { paths = ... }` calls add up rather than
 replacing each other.

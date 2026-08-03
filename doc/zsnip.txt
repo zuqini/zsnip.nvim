@@ -104,9 +104,24 @@ Options:
     include   string[]         Only load these languages
     exclude   string[]         Load every language except these
 
-A VSCode path is a directory containing a package.json. A snipmate path is a
-directory containing *.snippets files, or per-filetype directories of them.
-Repeated calls merge rather than replace.
+A snipmate path is a directory containing *.snippets files, or per-filetype
+directories of them. Repeated calls merge rather than replace.
+
+A VSCode path is a directory containing a package.json, or one holding loose
+snippet files the way VSCode keeps a user's own -- point one at
+~/.config/Code/User/snippets and it reads what is already there:
+
+    <language>.json    the filetype the file is named after
+    *.code-snippets    the languages each snippet's `scope` names, comma
+                       separated; an entry with no scope reaches every
+                       filetype, through `global_filetype`
+    package.json       still decides when present, and the files it names
+                       are not read a second time from the glob
+
+Loose files are only looked for under a configured path. A plugin on the
+'runtimepath' declares what it contributes in a package.json, and globbing
+every plugin directory for stray JSON would turn up much that is not a
+snippet.
 
                                                       *zsnip.filetype_extend()*
 zsnip.filetype_extend({filetype}, {inherits})

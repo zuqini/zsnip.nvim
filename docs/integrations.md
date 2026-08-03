@@ -217,3 +217,18 @@ Your own snippets need no plugin — point a loader at a directory:
 ```lua
 require('zsnip.loaders.from_vscode').lazy_load({ paths = vim.fn.stdpath('config') .. '/snippets' })
 ```
+
+A directory named this way needs no `package.json`. It is read the way VSCode
+reads its own user-snippets folder, so you can point one at
+`~/.config/Code/User/snippets` and get what is already there:
+
+| File | Serves |
+| --- | --- |
+| `<language>.json` | the filetype the file is named after — `python.json`, `lua.json` |
+| `*.code-snippets` | whichever languages each snippet's `scope` names, comma-separated; an entry with no `scope` goes to every filetype, through `global_filetype` |
+| `package.json` | if one is present it still decides, and the files it names are not read a second time from the glob |
+
+Loose files are only looked for under a `paths` directory you configured.
+Plugins on the runtimepath declare what they contribute in a `package.json`,
+and globbing every plugin directory for stray JSON would turn up a great deal
+that is not a snippet.
