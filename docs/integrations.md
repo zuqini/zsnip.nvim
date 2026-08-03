@@ -117,10 +117,12 @@ leaves the process.
 No completion plugin needed:
 
 ```lua
--- vim.lsp.completion only asks on the characters a server names, and a
--- snippet trigger can begin with any of them: `2x1table` and `#!` are both
--- real friendly-snippets triggers, so a letters-only list would leave the
--- first firing a keystroke late and the second never firing at all.
+-- Only needed for autotrigger. vim.lsp.completion asks unprompted on the
+-- characters a server names, and a snippet trigger can begin with any of
+-- them: `2x1table` and `#!` are both real friendly-snippets triggers, so a
+-- letters-only list would leave the first firing a keystroke late and the
+-- second never firing at all. Which items are offered, and what each replaces,
+-- is settled by the textEdit zsnip sends -- not by this list.
 local triggers = {}
 for byte = 33, 126 do
   triggers[#triggers + 1] = string.char(byte)
@@ -162,6 +164,9 @@ forwards to `completion_items()` — the same three the native sources accept.
 `vim.lsp.completion` expands snippet items itself, and `vim.snippet` runs the
 session — nothing else is involved. Without `autotrigger`, drop
 `trigger_characters` and ask for the menu with `<C-x><C-o>`.
+
+`require('zsnip').stop_lsp_server()` undoes all of it — the autocmd and the
+clients it attached — which `:checkhealth zsnip` then reports accurately.
 
 blink.cmp and nvim-cmp can consume the server too, through their existing LSP
 source, if you would rather not add a provider. The cost is that snippets are

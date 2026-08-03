@@ -69,7 +69,9 @@ describe(':checkhealth zsnip', function()
     require('zsnip.loaders.from_vscode').lazy_load()
     require('zsnip.loaders.from_snipmate').lazy_load()
 
-    assert.is_true(mentions(check().ok, 'loaders: vscode, snipmate'))
+    local report = check()
+    assert.is_true(mentions(report.ok, 'loader: vscode'))
+    assert.is_true(mentions(report.ok, 'loader: snipmate'))
   end)
 
   it('warns when nothing was found', function()
@@ -89,7 +91,7 @@ describe(':checkhealth zsnip', function()
 
     local bufnr = vim.api.nvim_create_buf(false, true)
     vim.bo[bufnr].filetype = 'lua'
-    require('zsnip.lsp').start()
+    helpers.start_lsp()
     assert.is_true(mentions(check().ok, 'serving: the in%-process LSP server'))
 
     helpers.stop_lsp()
@@ -107,7 +109,7 @@ describe(':checkhealth zsnip', function()
   it('warns when two sources are serving at once', function()
     local bufnr = vim.api.nvim_create_buf(false, true)
     vim.bo[bufnr].filetype = 'lua'
-    require('zsnip.lsp').start()
+    helpers.start_lsp()
     require('zsnip.complete').enable()
 
     assert.is_true(mentions(check().warn, 'Two sources are serving'))
@@ -121,10 +123,15 @@ describe(':checkhealth zsnip', function()
   -- :LspStop, so reporting it as "the menus can see the snippets" would be a
   -- clean bill of health for a server that is gone.
   it('does not call a stopped server healthy', function()
-    require('zsnip.lsp').start()
+    -- A buffer with a filetype for the server to attach to: without one there
+    -- is no client to stop, and the test would be measuring nothing.
+    local bufnr = vim.api.nvim_create_buf(false, true)
+    vim.bo[bufnr].filetype = 'lua'
+    helpers.start_lsp()
     helpers.stop_lsp_clients()
 
     assert.is_true(mentions(check().warn, 'no client is running'))
     helpers.stop_lsp()
+    vim.api.nvim_buf_delete(bufnr, { force = true })
   end)
 end)

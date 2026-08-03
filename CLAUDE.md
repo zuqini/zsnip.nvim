@@ -31,9 +31,14 @@ zsnip loads snippet collections and hands their bodies to Neovim's
   `lazy_load()`/`load()` entry points; thin wrappers over `registry.enable()`.
 - `body.lua` — everything between a body as written and a body
   `vim.snippet.expand()` accepts: variable resolution, `${0:…}` renumbering,
-  grammar validation.
-- `completion.lua` — snippets as `lsp.CompletionItem[]`.
-- `lsp.lua` — the in-process language server that serves them.
+  and validation — which is the grammar *and* the two asserts inside expand()
+  that the grammar does not cover.
+- `completion.lua` — two layers: `matches()` selects and resolves, `items()`
+  projects those onto `lsp.CompletionItem[]` and anchors the `textEdit` every
+  source needs so a symbol-leading trigger is reachable.
+- `lsp.lua` — the in-process language server that serves them. It must answer
+  on the next tick, never inline: `vim.lsp.completion` calls it from inside
+  'omnifunc', where textlock forbids `complete()`.
 - `blink.lua` / `cmp.lua` — native completion sources. Neither may `require`
   its engine at module scope: they must load on a config that does not have it.
 - `complete.lua` — a `'complete'` function source for Neovim's own completion.

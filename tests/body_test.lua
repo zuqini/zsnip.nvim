@@ -200,3 +200,93 @@ describe('body.text', function()
     assert.are.equal('${1:y} ' .. os.date('%Y'), text)
   end)
 end)
+
+describe('body.expandable', function()
+  -- Parsing is not the whole test. vim.snippet.expand() asserts on these two
+  -- *after* the grammar has accepted them -- and by then the completion engine
+  -- has already deleted the typed word, so the raise takes the word with it.
+  it('rejects a body with a second exit point', function()
+    assert.is_false(body.expandable('print($0) --[[$0]]'))
+    assert.is_false(body.expandable('${0:a} $0'))
+  end)
+
+  it('rejects placeholders that disagree about a tabstop', function()
+    assert.is_false(body.expandable('${1:foo} ${1:bar}'))
+  end)
+
+  it('keeps the shapes that only look like those', function()
+    assert.is_true(body.expandable('${1:foo} ${1:foo}'))
+    assert.is_true(body.expandable('${1:foo} $1'))
+    assert.is_true(body.expandable('print($0)'))
+    assert.is_true(body.expandable('${1|a,b|}'))
+  end)
+
+  it('still rejects what the grammar cannot parse', function()
+    assert.is_false(body.expandable('${'))
+  end)
+
+  -- Anything expandable() lets through has to survive the real thing.
+  --
+  -- No choice body here: expanding one schedules the |complete()| that opens
+  -- its menu, and a headless runner is not in insert mode by the time that
+  -- fires. The shape is covered above, where it is only parsed.
+  it('agrees with vim.snippet.expand', function()
+    local bufnr = helpers.typed('lua')
+    for _, candidate in ipairs({
+      'print($0) --[[$0]]',
+      '${1:foo} ${1:bar}',
+      '${1:foo} ${1:foo}',
+      "require '${1:mod}'",
+      '$CURRENT_YEAR',
+    }) do
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { '' })
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      local ok = pcall(vim.snippet.expand, body.resolve(candidate))
+      vim.snippet.stop()
+      assert.are.equal(body.expandable(candidate), ok, candidate)
+    end
+  end)
+end)
+
+describe('body.normalize', function()
+  it('renumbers the final tabstop and keeps the body', function()
+    assert.are.equal('a${1:x}', body.normalize('a${0:x}'))
+  end)
+
+  it('drops a body expand() would raise on', function()
+    assert.is_nil(body.normalize('$0$0'))
+    assert.is_nil(body.normalize('${'))
+  end)
+end)
+
+describe('body.resolve on the delimited forms', function()
+  -- Neovim knows neither form for a variable it does not have: an unknown name
+  -- becomes a tabstop holding its own *name*, and the author's default is
+  -- discarded on the way. So `${CURRENT_YEAR:2024}` used to insert the string
+  -- CURRENT_YEAR -- worse than having written nothing.
+  it('fills in a variable that carries a default', function()
+    assert.are.equal(os.date('%Y'), body.resolve('${CURRENT_YEAR:2024}'))
+  end)
+
+  -- Neovim implements no variable transforms at all -- ${TM_FILENAME/…/…/}
+  -- already inserts the whole filename -- so a resolved one behaves the same.
+  it('fills in a variable that carries a transform', function()
+    assert.are.equal(os.date('%Y'), body.resolve('${CURRENT_YEAR/x/y/}'))
+  end)
+
+  it('finds the closing brace past braces of its own', function()
+    assert.are.equal(os.date('%Y') .. '!', body.resolve('${CURRENT_YEAR:a{b}c}!'))
+  end)
+
+  it('leaves alone what is not ours to fill in', function()
+    assert.are.equal('${NOPE:x}', body.resolve('${NOPE:x}'))
+    assert.are.equal('${TM_FILENAME:x}', body.resolve('${TM_FILENAME:x}'))
+    assert.are.equal('\\${CURRENT_YEAR:2024}', body.resolve('\\${CURRENT_YEAR:2024}'))
+    assert.are.equal('${CURRENT_YEAR:oops', body.resolve('${CURRENT_YEAR:oops'))
+  end)
+
+  it('leaves the plain forms working', function()
+    assert.are.equal(os.date('%Y'), body.resolve('$CURRENT_YEAR'))
+    assert.are.equal(os.date('%Y'), body.resolve('${CURRENT_YEAR}'))
+  end)
+end)

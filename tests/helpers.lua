@@ -157,6 +157,19 @@ function M.reset()
   require('zsnip.config').reset()
 end
 
+---Start the in-process server and wait until a client is actually up.
+---
+---The server answers on the next tick rather than inline, so `initialize` --
+---and therefore attachment -- completes a round trip through the scheduler
+---after start() returns. See the comment on `request` in `zsnip.lsp`.
+---@param opts? table
+function M.start_lsp(opts)
+  require('zsnip.lsp').start(opts)
+  assert(vim.wait(2000, function()
+    return require('zsnip.lsp').running()
+  end), 'no zsnip LSP client came up')
+end
+
 ---Stop every zsnip client, leaving the autocmd that starts them in place --
 ---the state a `:LspStop` leaves behind.
 ---
@@ -175,9 +188,13 @@ function M.stop_lsp_clients()
 end
 
 ---Stop the in-process server and forget it was ever started.
+---
+---`lsp.stop()` is the real undo, including the module state a test cannot
+---reach from outside; the wait afterwards is what keeps the *next* test's
+---vim.lsp.start() from being handed a still-stopping client of the same name.
 function M.stop_lsp()
+  require('zsnip.lsp').stop()
   M.stop_lsp_clients()
-  pcall(vim.api.nvim_del_augroup_by_name, 'zsnip.lsp')
 end
 
 ---Undo runtimepath changes and delete every temp directory; call from
@@ -192,6 +209,45 @@ function M.cleanup()
   end
   tempdirs = {}
   M.reset()
+end
+
+---Apply an `lsp.CompletionItem` the way a client does: replace the span its
+---textEdit names, then expand the body. This is what blink.cmp, nvim-cmp and
+---|vim.lsp.completion| all end up doing with an item carrying
+---`insertTextFormat = Snippet`, so it is how a test asks "would accepting this
+---have produced the right buffer".
+---@param item lsp.CompletionItem
+---@return string[] lines
+function M.accept(item)
+  local edit = item.textEdit
+  if edit then
+    local row = edit.range.start.line
+    local line = vim.api.nvim_buf_get_lines(0, row, row + 1, false)[1] or ''
+    local from = vim.str_byteindex(line, 'utf-16', edit.range.start.character, false)
+    local to = vim.str_byteindex(line, 'utf-16', edit.range['end'].character, false)
+    vim.api.nvim_buf_set_text(0, row, from, row, to, { '' })
+    vim.api.nvim_win_set_cursor(0, { row + 1, from })
+  end
+  vim.snippet.expand(edit and edit.newText or item.insertText)
+  return vim.api.nvim_buf_get_lines(0, 0, -1, false)
+end
+
+---A real buffer in a real window, with `line` typed and the cursor after it.
+---
+---In a window because the sources anchor their replacement span to the cursor,
+---and 'virtualedit' because insert mode is the only mode any of this runs in:
+---normal mode clamps the column back one, which shortens the run under test.
+---@param filetype string
+---@param line? string
+---@return integer bufnr
+function M.typed(filetype, line)
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(bufnr)
+  vim.bo[bufnr].filetype = filetype
+  vim.o.virtualedit = 'onemore'
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { line or '' })
+  vim.api.nvim_win_set_cursor(0, { 1, #(line or '') })
+  return bufnr
 end
 
 ---@param snippets zsnip.Snippet[]

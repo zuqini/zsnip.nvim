@@ -16,15 +16,20 @@ local function start_server(opts)
   return client, exits
 end
 
+---The server answers on the next tick rather than inline -- see the comment on
+---`request` in `zsnip.lsp` -- so every reply here is waited for.
 ---@param client table
 ---@param method string
 ---@param params table?
 ---@return any
 local function request(client, method, params)
-  local result
+  local result, answered = nil, false
   client.request(method, params, function(_, response)
-    result = response
+    result, answered = response, true
   end)
+  assert.is_true(vim.wait(2000, function()
+    return answered
+  end))
   return result
 end
 
@@ -139,16 +144,40 @@ describe('the in-process server', function()
       assert.is_number(id)
     end
 
+    assert.is_true(vim.wait(2000, function()
+      return #replied == 3
+    end))
     assert.are.same({ 1, 2, 3 }, replied)
     assert.are.same({ 1, 2, 3 }, ids)
   end)
 
   it('still answers a client that offers no reply callback', function()
     local client = start_server()
-    local ok, id = client.request('initialize', {}, function() end)
+    local answered = false
+    local ok, id = client.request('initialize', {}, function()
+      answered = true
+    end)
 
     assert.is_true(ok)
     assert.are.equal(1, id)
+    assert.is_true(vim.wait(2000, function()
+      return answered
+    end))
+  end)
+
+  -- A reply lands on the next tick, and by then the client may be gone. The
+  -- callback belongs to a request nobody is waiting for any more.
+  it('does not answer once it has closed', function()
+    local client = start_server()
+    local answered = false
+    client.request('initialize', {}, function()
+      answered = true
+    end)
+    client.terminate()
+
+    assert.is_false(vim.wait(200, function()
+      return answered
+    end))
   end)
 
   it('reports exit and closing state', function()
@@ -331,13 +360,19 @@ describe('lsp.start', function()
     assert.are.equal(1, attached(bufnr, name))
 
     local client = vim.lsp.get_clients({ bufnr = bufnr, name = name })[1]
+    local answered = 0
     for _ = 1, 5 do
       client:request('textDocument/completion', {
         textDocument = { uri = vim.uri_from_bufnr(bufnr) },
         position = { line = 0, character = 0 },
-      }, function() end, bufnr)
+      }, function()
+        answered = answered + 1
+      end, bufnr)
     end
 
+    assert.is_true(vim.wait(2000, function()
+      return answered == 5
+    end))
     assert.are.equal(0, vim.tbl_count(client.requests))
     vim.api.nvim_buf_delete(bufnr, { force = true })
   end)
@@ -350,5 +385,73 @@ describe('lsp.start', function()
 
     assert.are.equal(1, attached(bufnr, 'zsnip'))
     vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+end)
+
+describe('the in-process server and awkward buffers', function()
+  -- vim.uri_from_bufnr() has nothing to say about a buffer with no name: it
+  -- returns a bare `file://`, which round-trips to a *different*,
+  -- filetype-less buffer -- and creates one. Every scratch buffer and every
+  -- `:enew | set ft=lua` used to be served nothing, and all of them collided
+  -- onto the same bufnr.
+  it('serves a buffer that has no name', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_set_current_buf(bufnr)
+    vim.bo[bufnr].filetype = 'lua'
+
+    local result = request(start_server(), 'textDocument/completion', {
+      textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+      position = { line = 0, character = 0 },
+    })
+
+    assert.are.equal(1, #result.items)
+    assert.are.equal('req', result.items[1].label)
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it('serves a request that names no document at all', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_set_current_buf(bufnr)
+    vim.bo[bufnr].filetype = 'lua'
+
+    local result = request(start_server(), 'textDocument/completion', { position = { line = 0, character = 0 } })
+
+    assert.are.equal(1, #result.items)
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+end)
+
+describe('lsp.stop', function()
+  after_each(helpers.stop_lsp)
+
+  -- Without this `started()` stays true for the life of the session, so
+  -- :checkhealth keeps reporting a server that is no longer there -- and no
+  -- API gets back to a clean state short of restarting Neovim.
+  it('undoes start, autocmd and clients alike', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(bufnr, helpers.tempdir() .. '/stop.lua')
+    vim.bo[bufnr].filetype = 'lua'
+    helpers.start_lsp()
+
+    assert.is_true(lsp.started())
+    assert.is_true(lsp.running())
+
+    lsp.stop()
+
+    assert.is_false(lsp.started())
+    assert.is_false(lsp.running())
+    -- The group is gone entirely, not merely emptied; asking about one that
+    -- does not exist is an error, which is the assertion.
+    assert.is_false(pcall(vim.api.nvim_get_autocmds, { group = 'zsnip.lsp' }))
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it('does nothing twice over, or when never started', function()
+    lsp.stop()
+    lsp.stop()
+    assert.is_false(lsp.started())
   end)
 end)

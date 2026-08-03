@@ -67,7 +67,12 @@ function M.parse(path)
       blanks = 0
       body[#body + 1] = vim.startswith(line, indent) and line:sub(#indent + 1) or line
     elseif line:match('^%s*$') then
-      blanks = blanks + 1
+      -- Only once a body is under way: a blank line between the header and
+      -- the first body line is how the format is often laid out, and counting
+      -- it would put an empty line in front of every such expansion.
+      if #body > 0 then
+        blanks = blanks + 1
+      end
     else
       -- A comment or anything else unindented ends the body.
       flush()

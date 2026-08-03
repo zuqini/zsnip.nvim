@@ -169,4 +169,128 @@ describe('the public surface', function()
     zsnip.setup({ command = false })
     assert.is_nil(vim.api.nvim_get_commands({})['ZSnip'])
   end)
+
+  -- Under a lazy plugin manager the second setup() is the user's and the first
+  -- was a dependency's default, so `command = false` has to be able to undo
+  -- one that already ran -- not merely decline to create another.
+  it('removes a command an earlier setup created', function()
+    zsnip.setup()
+    assert.is_not_nil(vim.api.nvim_get_commands({})['ZSnip'])
+
+    zsnip.setup({ command = false })
+    assert.is_nil(vim.api.nvim_get_commands({})['ZSnip'])
+  end)
+end)
+
+describe('the public surface', function()
+  it('carries a version', function()
+    assert.is_string(zsnip.version)
+    assert.is_truthy(zsnip.version:match('^%d+%.%d+%.%d+$'))
+  end)
+
+  -- These delegate to a module each. A mis-wired delegation -- reload() calling
+  -- registry.clear() rather than invalidate(), say -- would leave every
+  -- existence check green and silently discard the user's own snippets.
+  it('delegates add_snippets and filetype_extend', function()
+    zsnip.add_snippets('lua', { { prefix = 'own', body = 'b' } })
+    zsnip.add_snippets('all', { { prefix = 'global', body = 'b' } })
+    zsnip.filetype_extend('lua', 'python')
+    zsnip.add_snippets('python', { { prefix = 'inherited', body = 'b' } })
+
+    local prefixes = helpers.prefixes(zsnip.get('lua'))
+    assert.contains(prefixes, 'own')
+    assert.contains(prefixes, 'inherited')
+    assert.contains(prefixes, 'global')
+  end)
+
+  it('delegates completion_items', function()
+    zsnip.add_snippets('lua', { { prefix = 'req', body = "require '$1'" } })
+    local items = zsnip.completion_items({ filetype = 'lua' })
+
+    assert.are.equal(1, #items)
+    assert.are.equal('req', items[1].label)
+  end)
+
+  it('delegates resolve', function()
+    assert.are.equal(os.date('%Y'), zsnip.resolve('$CURRENT_YEAR'))
+  end)
+
+  -- reload() must forget the packs and keep what a config registered.
+  it('delegates reload without discarding registered snippets', function()
+    local dir = helpers.vscode_pack({ lua = { one = { prefix = 'from_pack', body = 'b' } } })
+    helpers.use_rtp(dir)
+    require('zsnip.loaders.from_vscode').lazy_load()
+    zsnip.add_snippets('lua', { { prefix = 'from_config', body = 'b' } })
+    assert.are.equal(2, #zsnip.get('lua'))
+
+    zsnip.reload()
+
+    assert.contains(helpers.prefixes(zsnip.get('lua')), 'from_config')
+    assert.contains(helpers.prefixes(zsnip.get('lua')), 'from_pack')
+  end)
+
+  it('delegates start_lsp_server and stop_lsp_server', function()
+    local lsp = require('zsnip.lsp')
+    assert.is_false(lsp.started())
+
+    zsnip.start_lsp_server({ name = 'zsnip_api_test' })
+    assert.is_true(lsp.started())
+
+    zsnip.stop_lsp_server()
+    assert.is_false(lsp.started())
+  end)
+
+  it('delegates stop to the session', function()
+    zsnip.add_snippets('lua', { { prefix = 'req', body = "require '${1:mod}'" } })
+    type_line('req')
+    assert.is_true(zsnip.expand())
+    assert.is_true(zsnip.active())
+
+    zsnip.stop()
+    assert.is_false(zsnip.active())
+  end)
+end)
+
+describe('zsnip.setup validation', function()
+  ---@return string[]
+  local function warnings(opts)
+    local notify, collected = vim.notify, {}
+    vim.notify = function(message)
+      collected[#collected + 1] = message
+    end
+    local ok, err = pcall(zsnip.setup, opts)
+    vim.notify = notify
+    assert(ok, err)
+    return collected
+  end
+
+  -- A merged-in typo is a silent no-op that reads exactly like the option not
+  -- working.
+  it('names an option it does not know', function()
+    local said = warnings({ max_item = 50 })
+    assert.are.equal(1, #said)
+    assert.is_truthy(said[1]:match('unknown option "max_item"'))
+  end)
+
+  it('names an option of the wrong type', function()
+    local said = warnings({ max_items = 'lots' })
+    assert.are.equal(1, #said)
+    assert.is_truthy(said[1]:match('max_items should be number, got string'))
+  end)
+
+  it('says nothing about a config that is right', function()
+    assert.are.same({}, warnings({
+      extend = { lua = { 'python' } },
+      global_filetype = false,
+      max_items = 10,
+      documentation = false,
+      command = false,
+    }))
+  end)
+
+  -- One wrong option must not cost the other four.
+  it('keeps the rest of a config that has one bad key', function()
+    warnings({ max_items = 7, nonsense = true })
+    assert.are.equal(7, require('zsnip.config').options.max_items)
+  end)
 end)

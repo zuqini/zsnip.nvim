@@ -394,3 +394,104 @@ describe('registry.reload', function()
     assert.are.same({ 'mine', 'packed' }, helpers.prefixes(registry.get('lua')))
   end)
 end)
+
+describe('registry sources shared between filetypes', function()
+  -- One `.code-snippets` file serves several languages, and each visit hands
+  -- back only what is in scope for the one asked about. Deduplicating on the
+  -- path alone, a typescript buffer that inherits javascript sees the file
+  -- once -- as typescript -- and the javascript snippets in it are gone.
+  it('reads a multi-scope file once per language it is reached as', function()
+    local dir = helpers.tempdir()
+    helpers.write(
+      dir .. '/mine.code-snippets',
+      vim.json.encode({
+        tsonly = { scope = 'typescript', prefix = 'tsx', body = 'TS' },
+        jsonly = { scope = 'javascript', prefix = 'jsx', body = 'JS' },
+      })
+    )
+    require('zsnip').setup({ extend = { typescript = { 'javascript' } } })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    local prefixes = helpers.prefixes(registry.get('typescript'))
+    assert.contains(prefixes, 'tsx')
+    assert.contains(prefixes, 'jsx')
+  end)
+
+  it('still offers a shared file only once per language', function()
+    local dir = helpers.vscode_shared_pack({ 'lua' }, { one = { prefix = 'a', body = 'b' } })
+    helpers.use_rtp(dir)
+    require('zsnip.loaders.from_vscode').lazy_load()
+
+    assert.are.same({ 'a' }, helpers.prefixes(registry.get('lua')))
+  end)
+end)
+
+describe('registry discovery of awkward paths', function()
+  -- A configured path is data, not a pattern. glob() treats a `[` in one as
+  -- syntax and matches nothing at all -- for that whole directory, silently.
+  it('reads a directory whose name holds glob metacharacters', function()
+    local dir = helpers.tempdir() .. '/snip[s]'
+    helpers.write(dir .. '/lua.json', vim.json.encode({ one = { prefix = 'a', body = 'b' } }))
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({ 'a' }, helpers.prefixes(registry.get('lua')))
+  end)
+
+  it('does not mind a configured path that is not there', function()
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = '/nope/not/here' })
+    assert.are.same({}, registry.get('lua'))
+  end)
+
+  it('reads snipmate files loose and one directory down', function()
+    local dir = helpers.tempdir()
+    helpers.write(dir .. '/lua.snippets', 'snippet loose\n\tbody')
+    helpers.write(dir .. '/python/whatever.snippets', 'snippet nested\n\tbody')
+    require('zsnip.loaders.from_snipmate').lazy_load({ paths = dir })
+
+    assert.are.same({ 'loose' }, helpers.prefixes(registry.get('lua')))
+    assert.are.same({ 'nested' }, helpers.prefixes(registry.get('python')))
+  end)
+end)
+
+describe('registry.dropped', function()
+  -- The other half of "my snippet is missing": found, then discarded for being
+  -- one vim.snippet.expand() would raise on. Nothing else reports it.
+  it('counts the bodies that were thrown away', function()
+    assert.are.equal(0, registry.dropped())
+    registry.add('lua', {
+      { prefix = 'good', body = 'fine' },
+      { prefix = 'bad', body = '${' },
+      { prefix = 'worse', body = '$0$0' },
+    })
+
+    assert.are.same({ 'good' }, helpers.prefixes(registry.get('lua')))
+    assert.are.equal(2, registry.dropped())
+  end)
+
+  -- A rescan re-reads the packs, so the count from them has to start over --
+  -- but it does not re-read what a config registered, so that half must not.
+  it('starts the file-derived count over on a rescan, and keeps the rest', function()
+    local dir = helpers.vscode_pack({ lua = { bad = { prefix = 'x', body = '${' } } })
+    helpers.use_rtp(dir)
+    require('zsnip.loaders.from_vscode').lazy_load()
+    registry.add('lua', { { prefix = 'alsobad', body = '$0$0' } })
+
+    registry.get('lua')
+    assert.are.equal(2, registry.dropped())
+
+    registry.invalidate()
+    assert.are.equal(1, registry.dropped())
+  end)
+end)
+
+describe('registry.loader', function()
+  it('hands back what a loader was registered with', function()
+    assert.is_nil(registry.loader('vscode'))
+
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = '/tmp/one', exclude = { 'lua' } })
+    local opts = registry.loader('vscode')
+
+    assert.are.same({ '/tmp/one' }, opts.paths)
+    assert.are.same({ 'lua' }, opts.exclude)
+  end)
+end)

@@ -225,3 +225,62 @@ describe('the complete source expanding an accepted item', function()
     assert.are.same({ "require 'mod'" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
   end)
 end)
+
+describe('the complete source and its options', function()
+  -- The docs promise the same `documentation` as the other three sources.
+  -- `info` is the preview window, and it used to carry the body regardless.
+  it('strips the body and description when documentation is off', function()
+    registry.add('lua', { { prefix = 'req', body = 'b', description = 'a require' } })
+    lua_buffer('req')
+    complete.enable({ documentation = false, complete = false })
+
+    local item = complete.completefunc(0, 'req').words[1]
+    assert.are.equal('', item.info)
+    assert.are.equal('', item.menu)
+    -- Still expandable: the body travels in user_data, not in the preview.
+    assert.are.equal('b', item.user_data.zsnip.body)
+  end)
+
+  it('carries them when it is on', function()
+    registry.add('lua', { { prefix = 'req', body = 'b', description = 'a require' } })
+    lua_buffer('req')
+    complete.enable({ complete = false })
+
+    local item = complete.completefunc(0, 'req').words[1]
+    assert.are.equal('b', item.info)
+    assert.are.equal('a require', item.menu)
+  end)
+
+  it('caps at max_items like the docs say', function()
+    local snippets = {}
+    for index = 1, 150 do
+      snippets[index] = { prefix = ('p%03d'):format(index), body = 'b' }
+    end
+    registry.add('lua', snippets)
+    lua_buffer('p')
+    complete.enable({ complete = false })
+
+    assert.are.equal(100, #complete.completefunc(0, 'p').words)
+  end)
+end)
+
+describe('the complete source refusing to expand', function()
+  -- The guard exists because the range may not be in the buffer any more. When
+  -- it fires, expanding anyway puts the body *next to* the trigger rather than
+  -- over it -- so the buffer ends up with both.
+  it('leaves the buffer alone when the trigger is not where it should be', function()
+    lua_buffer('req')
+    complete.enable()
+
+    -- `word` longer than the line: the computed start is negative.
+    vim.api.nvim_win_set_cursor(0, { 1, 3 })
+    vim.v.completed_item = {
+      word = 'a much longer word than the line',
+      user_data = { zsnip = { body = "require 'mod'", keep = 0 } },
+    }
+    vim.api.nvim_exec_autocmds('CompleteDone', {})
+
+    assert.are.same({ 'req' }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+    assert.is_false(vim.snippet.active())
+  end)
+end)

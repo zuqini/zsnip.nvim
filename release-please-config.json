@@ -5,7 +5,13 @@
   "bump-minor-pre-major": true,
   "packages": {
     ".": {
-      "package-name": "zsnip.nvim"
+      "package-name": "zsnip.nvim",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "lua/zsnip/init.lua"
+        }
+      ]
     }
   }
 }

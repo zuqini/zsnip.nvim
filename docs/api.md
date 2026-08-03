@@ -12,8 +12,13 @@ requires `setup()` to have run — it only stores options and creates `:ZSnip`.
 | `extend` | `table<string, string\|string[]>` | `{}` | Filetype inheritance |
 | `global_filetype` | `string\|false` | `'all'` | Bucket every filetype inherits from |
 | `max_items` | `integer` | `100` | Default cap for `completion_items()` and for `zsnip.complete`. The `blink`, `cmp` and `lsp` sources ask for an uncapped list, since the engine behind them filters and ranks it; `zsnip.complete` matches for itself and hands the result straight to the menu, so it is bounded by this |
-| `documentation` | `boolean` | `true` | Attach the body as item documentation |
+| `documentation` | `boolean` | `true` | Attach the body and description to each item |
 | `command` | `boolean` | `true` | Create the [`:ZSnip`](#the-zsnip-command) command |
+
+An unknown key, or a known one of the wrong type, is reported with
+`vim.notify` and otherwise ignored — the rest of the config still applies.
+`command = false` removes an existing `:ZSnip` as well as declining to create
+one, so a later `setup()` can undo an earlier one.
 
 ### `zsnip.loaders.from_vscode.lazy_load(opts?)` / `.load(opts?)`
 ### `zsnip.loaders.from_snipmate.lazy_load(opts?)` / `.load(opts?)`
@@ -43,6 +48,10 @@ loose snippet files the way VSCode keeps a user's own — so
 
 Loose files are only looked for under a configured `path`, never on the
 runtimepath — a plugin there declares what it contributes in a `package.json`.
+
+Comments and trailing commas are accepted in any of these. VSCode generates
+every user snippet file with a `//` header block, and strict JSON would reject
+the file — and every snippet in it — for that alone.
 
 Calls merge, so two `lazy_load { paths = ... }` calls add up rather than
 replacing each other.
@@ -94,6 +103,7 @@ what `expand_snippet()` expects back.
 | `prefix` | `string` | Fuzzy-match triggers against this; unset returns everything |
 | `filetype` | `string` | Defaults to the filetype of `bufnr` |
 | `bufnr` | `integer` | Defaults to the current buffer |
+| `position` | `lsp.Position` | Cursor the response is anchored to; defaults to the real one when `bufnr` is the current buffer |
 | `limit` | `integer` | Overrides `max_items` |
 | `documentation` | `boolean` | Overrides the configured default |
 | `filter` | `fun(snippet): boolean` | Keep only the snippets this returns true for |
@@ -106,6 +116,22 @@ Items carry `insertTextFormat = Snippet` and a resolved `insertText`, so a
 client expands them with no further work. One item per trigger — the first
 occurrence in shadowing order wins.
 
+They also carry a `textEdit` naming the span to replace: the whole non-blank
+run before the cursor. Left to pick that span itself a client picks the keyword
+before the cursor, which is not what a trigger is — `<div` would be filtered
+out for not matching the prefix `div`, and `#!` would be inserted in front of
+its own expansion rather than over it. Every item in a response shares one
+span, because `vim.lsp.completion` filters the whole list against the lowest
+start it is given.
+
+Where the run holds text the trigger does not account for — the `(` of `(req` —
+that text is inside the replaced span, so it is put back in front of the body
+(escaped, not as snippet syntax) and `filterText` covers the whole run.
+
+`textEdit` needs a cursor to anchor to. There is none when `bufnr` is not the
+current buffer and no `position` was given; the items are then plain, as
+before.
+
 `sortText` is set only when `prefix` was given, i.e. when zsnip did the
 ranking. Without it the order is whichever order the packs were read in, and
 pinning a client to that would stop it applying the ranking it does better;
@@ -117,10 +143,23 @@ Resolve the variables Neovim does not know in an arbitrary body. Applied
 automatically to everything zsnip hands out; exposed for bodies that come from
 somewhere else.
 
+All four spellings are handled: `$VAR`, `${VAR}`, `${VAR:default}` and
+`${VAR/regex/format/}`. The last two collapse to the plain value — the default
+because we have one (`vim.snippet.expand()` discards it anyway and inserts the
+variable's *name*), the transform because Neovim implements none, so
+`${TM_FILENAME/(.*)\\..*/$1/}` already inserts the whole filename today.
+
+A name zsnip does not know is left exactly as written, for `vim.snippet` to
+deal with — plenty of bodies contain a `$NAME` that is text.
+
 ### `zsnip.reload()`
 
 Forget everything read from disk; the next lookup rescans. Snippets added
 through `add_snippets()` survive.
+
+### `zsnip.version` → `string`
+
+The plugin's own version, e.g. `'0.1.0'`. `:checkhealth zsnip` reports it.
 
 ## Expanding
 
@@ -176,8 +215,21 @@ zsnip's own client only, never to your language servers.
 The whole filetype is returned in one uncut list (`isIncomplete = false`),
 which is what lets the client do its own filtering and ranking.
 
-`require('zsnip.lsp').server(opts)` returns the `cmd` function on its own, for
-wiring the server up by hand.
+### `zsnip.stop_lsp_server()`
+
+Stop it again: the autocmd that attaches it goes, and so do the clients it
+attached. Idempotent, and the exact undo of `start_lsp_server()`.
+
+| Function | Does |
+| --- | --- |
+| `require('zsnip.lsp').started()` | Whether the attaching autocmd is installed |
+| `require('zsnip.lsp').running()` | Whether a client is actually up. Registered is not the same as serving: a `filetypes` list that excluded every buffer opened so far, or a `:LspStop`, leaves the autocmd in place with nothing behind it |
+| `require('zsnip.lsp').server(opts)` | The `cmd` function on its own, for wiring the server up by hand |
+
+The server answers on the next tick rather than inline. Being in-process makes
+a synchronous reply possible and it is wrong: `vim.lsp.completion` drives
+`'omnifunc'`, which returns `-2` to say "the items come later" precisely
+because textlock forbids `complete()` while the option is being evaluated.
 
 ### The `:ZSnip` command
 
@@ -204,14 +256,18 @@ the name `zsnip`; `opts` are the same three. nvim-cmp is required by
 ### `zsnip.complete`
 
 A source for Neovim's own insert-mode completion, through `'complete'`.
-Requires Neovim 0.12. Needs no completion plugin and no LSP client.
+Requires Neovim 0.12. Needs no completion plugin and no LSP client. `opts` are
+the same `limit`, `documentation` and `filter` as the other three — except that
+`limit` defaults to `max_items` here rather than to uncapped, since nothing
+downstream trims what this source returns.
 
 | Function | Does |
 | --- | --- |
 | `require('zsnip.complete').enable(opts?)` | Append zsnip to `'complete'` and install the `CompleteDone` handler that expands what is accepted. Idempotent; `opts` are the same three, plus `complete = false` |
 | `require('zsnip.complete').disable()` | Remove both again |
 | `require('zsnip.complete').source()` | The entry to put in `'complete'` yourself; append `^{count}` to cap it |
-| `require('zsnip.complete').completefunc(findstart, base)` | The raw [`complete-functions`](https://neovim.io/doc/user/insert.html#complete-functions) implementation, for putting in `'complete'` yourself |
+| `require('zsnip.complete').enabled()` | Whether zsnip is in `'complete'` for the current buffer, with or without a `^{count}` cap |
+| `require('zsnip.complete').completefunc(findstart, base)` | The raw [`complete-functions`](https://neovim.io/doc/user/insert.html#complete-functions) implementation. Pair it with `enable({ complete = false })`, which installs the `CompleteDone` handler without touching the option — without that, accepting an item inserts a literal `${1:mod}` |
 
 `enable()` does not set `'autocomplete'` — CTRL-N reaches the source either
 way, and whether the menu opens by itself is your decision.

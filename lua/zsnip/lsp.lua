@@ -28,6 +28,24 @@ local M = {}
 ---@field is_closing fun(): boolean
 ---@field terminate fun()
 
+---The buffer a request came from.
+---
+---Not `vim.uri_to_bufnr()` alone: |vim.uri_from_bufnr()| has nothing to say
+---about a buffer with no name and returns a bare `file://`, which round-trips
+---to a *different*, filetype-less buffer -- and creates one, so every scratch
+---buffer and every `:enew | set ft=lua` would be served nothing and collide
+---onto the same bufnr. A request with no usable URI came from where the cursor
+---is, which is the buffer we are in.
+---@param uri string?
+---@return integer
+local function requesting_buffer(uri)
+  if type(uri) ~= 'string' or uri == '' or uri == 'file://' then
+    return vim.api.nvim_get_current_buf()
+  end
+  local bufnr = vim.uri_to_bufnr(uri)
+  return vim.api.nvim_buf_is_loaded(bufnr) and bufnr or vim.api.nvim_get_current_buf()
+end
+
 ---@param opts zsnip.LspOpts
 ---@return fun(dispatchers: vim.lsp.rpc.Dispatchers): zsnip.RpcClient
 local function server(opts)
@@ -45,55 +63,72 @@ local function server(opts)
       dispatchers.on_exit(0, 15)
     end
 
-    ---@param params lsp.CompletionParams
+    ---@param params lsp.CompletionParams?
     ---@return lsp.CompletionList
     local function complete(params)
-      local bufnr = vim.uri_to_bufnr(params.textDocument.uri)
-      local filetype = vim.bo[bufnr].filetype
+      local bufnr = requesting_buffer(vim.tbl_get(params or {}, 'textDocument', 'uri'))
       local forwarded = completion.source_opts(opts, bufnr)
-      forwarded.filetype = filetype ~= '' and filetype or nil
+      forwarded.position = params and params.position or nil
       return { isIncomplete = false, items = completion.items(forwarded) }
     end
 
+    ---@param method string
+    ---@param params table?
+    ---@return any
+    local function answer(method, params)
+      if method == 'initialize' then
+        return {
+          capabilities = {
+            completionProvider = {
+              -- Empty by default, as |vim.lsp.completion| reads this to
+              -- decide when to ask unprompted: blink.cmp and nvim-cmp ask
+              -- on every keystroke of their own accord, and a client that
+              -- does not should be told which characters matter by the
+              -- config that knows what its triggers look like.
+              triggerCharacters = opts.trigger_characters or {},
+              resolveProvider = false,
+            },
+            positionEncoding = 'utf-16',
+          },
+          serverInfo = { name = opts.name or 'zsnip' },
+        }
+      elseif method == 'textDocument/completion' then
+        return complete(params)
+      end
+      -- 'shutdown' and anything a client asks for that was never advertised:
+      -- an empty result is a valid answer to all of them.
+      return nil
+    end
+
     return {
-      ---`notify_reply` is how a client learns the request is done. Answering
-      ---without it leaves one 'pending' entry behind per completion, forever --
-      ---under `autotrigger`, one per keystroke. Calling it before returning
-      ---also tells |vim.lsp.Client:request()| we resolved synchronously, so it
-      ---never registers the request at all. That second half is why the floor
-      ---is 0.12: before the `already_responded` guard landed in 0.11.2 the
-      ---client registered the entry *after* rpc.request() returned, so this
-      ---cleared nothing and logged an error for every reply instead.
+      ---Answered on the next tick, never inline.
+      ---
+      ---Being in-process makes a synchronous reply possible, and it is wrong:
+      ---|vim.lsp.completion| drives 'omnifunc', which returns -2 to say "the
+      ---items come later" precisely because textlock forbids |complete()|
+      ---while the option is being evaluated. Replying inside rpc.request()
+      ---puts vim.fn.complete() back inside that window, and the whole path
+      ---dies with E565 -- no menu at all, on every trigger. The same holds for
+      ---the `autotrigger` route, which runs under InsertCharPre.
+      ---
+      ---`notify_reply` is how a client learns the request is done. Without it
+      ---every completion leaves a 'pending' entry behind, forever -- under
+      ---`autotrigger`, one per keystroke. Deferred, it lands after
+      ---|vim.lsp.Client:request()| has registered the request, which is the
+      ---ordinary out-of-process order and needs no version guard.
       request = function(method, params, callback, notify_reply)
         request_id = request_id + 1
         local id = request_id
 
-        if method == 'initialize' then
-          callback(nil, {
-            capabilities = {
-              completionProvider = {
-                -- Empty by default, as |vim.lsp.completion| reads this to
-                -- decide when to ask unprompted: blink.cmp and nvim-cmp ask
-                -- on every keystroke of their own accord, and a client that
-                -- does not should be told which characters matter by the
-                -- config that knows what its triggers look like.
-                triggerCharacters = opts.trigger_characters or {},
-                resolveProvider = false,
-              },
-            },
-            serverInfo = { name = opts.name or 'zsnip' },
-          }, id)
-        elseif method == 'textDocument/completion' then
-          callback(nil, complete(params), id)
-        else
-          -- 'shutdown' and anything a client asks for that was never
-          -- advertised: an empty result is a valid answer to all of them.
-          callback(nil, nil, id)
-        end
-
-        if notify_reply then
-          notify_reply(id)
-        end
+        vim.schedule(function()
+          if closing then
+            return
+          end
+          callback(nil, answer(method, params), id)
+          if notify_reply then
+            notify_reply(id)
+          end
+        end)
         return true, id
       end,
       notify = function(method)
@@ -181,6 +216,20 @@ function M.start(opts)
       attach(bufnr)
     end
   end
+end
+
+---Stop the server and forget it was ever started: the autocmd goes, and so do
+---the clients it attached. Idempotent, and the exact undo of |M.start()| --
+---without it `started()` stays true for the life of the session, so
+---`:checkhealth zsnip` keeps reporting a server that is no longer there.
+function M.stop()
+  if augroup then
+    pcall(vim.api.nvim_del_augroup_by_id, augroup)
+  end
+  for _, client in ipairs(client_name and vim.lsp.get_clients({ name = client_name }) or {}) do
+    client:stop(true)
+  end
+  augroup, client_name = nil, nil
 end
 
 ---Whether |zsnip.start_lsp_server()| has installed the autocmd that attaches

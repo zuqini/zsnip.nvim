@@ -37,9 +37,17 @@ What zsnip adds on top of the engine:
   snipmate .snippets files including their `extends` lines.
 - The variables Neovim does not resolve. Core knows the TM_* set and turns
   every other variable into a tabstop holding its own name; zsnip resolves the
-  date, workspace, comment-marker, clipboard, UUID and RANDOM families first.
-- Bodies core cannot parse are dropped on load, rather than raising at accept
-  time after the completion engine has already deleted the typed word.
+  date, workspace, comment-marker, clipboard, UUID and RANDOM families first,
+  in all four spellings -- $VAR, ${VAR}, ${VAR:default} and
+  ${VAR/regex/format/}.
+- Bodies core cannot take are dropped on load, rather than raising at accept
+  time after the completion engine has already deleted the typed word. That
+  covers both the ones the grammar rejects and the ones it accepts that
+  |vim.snippet.expand()| then asserts on -- a second $0, or two placeholders
+  that disagree about a tabstop.
+- Triggers that are not words -- `<div`, `#!`, `console.log`. Every source
+  tells the menu to replace the whole non-blank run before the cursor, so such
+  a trigger is offered at all and lands over what you typed.
 - `${0:text}` is renumbered past the last real tabstop, so a placeholder on
   the exit point is reachable.
 - Native sources for blink.cmp and nvim-cmp, and an in-process LSP server for
@@ -83,10 +91,15 @@ Optional -- every default works without it. Stores options and creates
       max_items = 100,          -- default cap for completion_items() and
                                 -- for zsnip.complete; blink/cmp/lsp ask
                                 -- for an uncapped list and filter it
-      documentation = true,     -- attach the body as item documentation
+      documentation = true,     -- attach the body and description to items
       command = true,           -- create :ZSnip
     })
 <
+An unknown key, or a known one of the wrong type, is reported with
+|vim.notify()| and otherwise ignored -- the rest of the config still applies.
+`command = false` removes an existing |:ZSnip| as well as declining to create
+one, so a later setup() can undo an earlier one.
+
 ==============================================================================
 5. LOADERS                                                      *zsnip-loaders*
 
@@ -98,6 +111,10 @@ Optional -- every default works without it. Stores options and creates
 <
 Register a loader. `lazy_load()` defers every read until a filetype asks for
 it; `load()` takes the same options but scans and decodes everything up front.
+
+Comments and trailing commas are accepted in VSCode snippet JSON. VSCode
+generates every user snippet file with a `//` header block, and strict JSON
+would reject the file -- and every snippet in it -- for that alone.
 
 Options:
     paths     string|string[]  Directories to read besides the 'runtimepath'
@@ -213,14 +230,22 @@ vim.lsp.completion.enable(), so without it the items arrive and accepting one
 puts a literal `${1:mod}` in the buffer. It is applied to zsnip's own client
 only, never to your language servers.
 
+The server answers on the next tick rather than inline. Being in-process makes
+a synchronous reply possible and it is wrong: |vim.lsp.completion| drives
+'omnifunc', which returns -2 to say "the items come later" precisely because
+textlock forbids |complete()| while the option is being evaluated.
+
 blink.cmp and nvim-cmp can receive the snippets this way too, through their
 existing LSP source, at the cost of no longer being able to configure snippets
-separately from language-server items. For Neovim's own completion, name the
-trigger characters -- |vim.lsp.completion| reads them to decide when to ask:
+separately from language-server items. For Neovim's own completion with
+`autotrigger`, name the trigger characters -- |vim.lsp.completion| reads them
+to decide when to ask unprompted:
 
 A trigger can begin with any printable character -- `2x1table` and `#!` are
 both real friendly-snippets triggers -- so a letters-only list leaves the first
-firing a keystroke late and the second never firing at all.
+firing a keystroke late and the second never firing at all. This decides only
+*when* the client asks; which items are offered, and what each one replaces, is
+settled by the textEdit zsnip sends. With <C-x><C-o> it is not needed at all.
 >lua
     local triggers = {}
     for byte = 33, 126 do
@@ -232,6 +257,16 @@ firing a keystroke late and the second never firing at all.
       completion = { autotrigger = true },
     })
 <
+                                                      *zsnip.stop_lsp_server()*
+zsnip.stop_lsp_server()
+
+Stop it again: the autocmd that attaches the server goes, and so do the clients
+it attached. Idempotent, and the exact undo of |zsnip.start_lsp_server()|.
+
+`require('zsnip.lsp').started()` reports whether the attaching autocmd is
+installed, and `require('zsnip.lsp').running()` whether a client is actually
+up -- registered is not the same as serving.
+
                                                               *zsnip.complete*
 Neovim's built-in completion~
 >lua
@@ -255,7 +290,10 @@ enabled() and disable() read the entry with or without its `^{count}`, so a
 capped setup is recognised rather than appended to twice.
 
 enable() takes the same `limit`, `documentation` and `filter` as the other
-sources, and disable() undoes both halves. It deliberately leaves
+sources -- except that `limit` defaults to `max_items` here rather than to
+uncapped, since nothing downstream trims what this source returns.
+`documentation = false` drops the description from the menu and the body from
+the preview window, and disable() undoes both halves of enable(). It deliberately leaves
 'autocomplete' alone -- whether the menu opens by itself is your decision.
 
 Two things are specific to this path. zsnip does the matching, returning
@@ -278,10 +316,25 @@ Options:
     prefix         string   Fuzzy-match triggers against this
     filetype       string   Defaults to the filetype of {bufnr}
     bufnr          integer  Defaults to the current buffer
+    position       table    lsp.Position the response is anchored to; defaults
+                             to the real cursor when {bufnr} is the current
+                             buffer
     limit          integer  Overrides `max_items`
     documentation  boolean  Overrides the configured default
     filter         function  Keep only the snippets it returns true for;
                              runs before matching and before `limit`
+
+Items also carry a `textEdit` naming the span to replace: the whole non-blank
+run before the cursor. Left to pick that span itself a client picks the keyword
+before the cursor, which is not what a trigger is -- `<div` would be filtered
+out for not matching the prefix `div`, and `#!` would be inserted in front of
+its own expansion rather than over it. Every item in a response shares one
+span, because |vim.lsp.completion| filters the whole list against the lowest
+start it is given. Text in the run that the trigger does not account for -- the
+`(` of `(req` -- is put back in front of the body, escaped so it stays text.
+
+A `textEdit` needs a cursor to anchor to. There is none when {bufnr} is not the
+current buffer and no {position} was given; the items are then plain.
 
 ==============================================================================
 8. API                                                              *zsnip-api*
@@ -298,7 +351,15 @@ zsnip.available()
 
                                                               *zsnip.resolve()*
 zsnip.resolve({body})
-    Resolve the variables Neovim does not know in an arbitrary body.
+    Resolve the variables Neovim does not know in an arbitrary body. Handles
+    $VAR, ${VAR}, ${VAR:default} and ${VAR/regex/format/}; the last two
+    collapse to the plain value, since |vim.snippet.expand()| discards the
+    default and implements no transforms. A name zsnip does not know is left
+    exactly as written.
+
+                                                              *zsnip.version*
+zsnip.version
+    The plugin's own version, e.g. `'0.1.0'`. Reported by |:checkhealth| zsnip.
 
                                                                *zsnip.reload()*
 zsnip.reload()

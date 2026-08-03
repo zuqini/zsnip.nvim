@@ -17,13 +17,50 @@ local M = {}
 
 local has_grammar, grammar = pcall(require, 'vim.lsp._snippet_grammar')
 
----Whether |vim.snippet.expand()| can parse this body. ~4% of
----friendly-snippets' bodies cannot be, and they are cheaper to drop at load
----time than to fail on at accept time.
+---Parsing is not the whole test: |vim.snippet.expand()| asserts on two shapes
+---the grammar accepts happily, and an assert is as fatal as a parse error at
+---the point it fires. Both are decided by walking the top-level children the
+---same way expand() does.
+---
+---  - more than one `$0`: the exit point has to be unambiguous;
+---  - two placeholders that disagree about what tabstop N holds --
+---    `${1:foo} ${1:bar}` -- because expand() has one value per tabstop.
+---@param parsed table Root node from `grammar.parse`
+---@return boolean
+local function well_formed(parsed)
+  local placeholders, exits = {}, 0
+  for _, child in ipairs(parsed.data.children) do
+    local data = child.data
+    if child.type == grammar.NodeType.Placeholder then
+      local value = tostring(data.value)
+      if placeholders[data.tabstop] and placeholders[data.tabstop] ~= value then
+        return false
+      end
+      placeholders[data.tabstop] = value
+    end
+    -- Text and variable nodes have no tabstop; the rest all reserve one.
+    if data.tabstop == 0 then
+      exits = exits + 1
+      if exits > 1 then
+        return false
+      end
+    end
+  end
+  return true
+end
+
+---Whether |vim.snippet.expand()| accepts this body. ~4% of friendly-snippets'
+---bodies do not parse, and they are cheaper to drop at load time than to fail
+---on at accept time -- where the completion engine has already deleted the
+---typed word, so the raised error takes the word with it.
 ---@param body string
 ---@return boolean
 function M.expandable(body)
-  return not has_grammar or (pcall(grammar.parse, body))
+  if not has_grammar then
+    return true
+  end
+  local ok, parsed = pcall(grammar.parse, body)
+  return ok and well_formed(parsed)
 end
 
 local DATE_FORMAT = {
@@ -153,6 +190,39 @@ local shared = {}
 ---@type string
 local subject = ''
 
+---@param name string
+---@return string?
+local function value_of(name)
+  if VOLATILE[name] then
+    return variable(name)
+  end
+  local value = shared[name]
+  if value == nil then
+    -- `false`, not nil: an unknown name has to stay a hit, or every `$NAME`
+    -- that is plain text is looked up again for every snippet.
+    value = variable(name) or false
+    shared[name] = value
+  end
+  return value or nil
+end
+
+---The result is re-parsed as snippet text, so a '$' or '}' out of a clipboard
+---has to stop being syntax.
+---@param value string
+---@return string
+local function escape(value)
+  return (value:gsub('[\\%$}]', '\\%0'))
+end
+
+---Text that must survive |vim.snippet.expand()| verbatim. Same escape as a
+---resolved variable, for the same reason: buffer text placed in front of a
+---body -- the `(` of a `(req` -- is parsed as part of it.
+---@param value string
+---@return string
+function M.literal(value)
+  return escape(value)
+end
+
 ---Returning nil leaves the whole match alone, which is what both an escaped
 ---`\${VAR}` and a name we do not know should do -- plenty of bodies contain
 ---things like LaTeX's `$C$` or a bare `$NAME` that are text, not variables.
@@ -163,24 +233,72 @@ local function substitute(at, name)
   if escaped(subject, at) then
     return nil
   end
+  local value = value_of(name)
+  return value and escape(value)
+end
 
-  local value
-  if VOLATILE[name] then
-    value = variable(name)
-  else
-    value = shared[name]
-    if value == nil then
-      -- `false`, not nil: an unknown name has to stay a hit, or every `$NAME`
-      -- that is plain text is looked up again for every snippet.
-      value = variable(name) or false
-      shared[name] = value
+---Index just past the `}` closing the `{` at `from`, or nil if it never
+---closes. Counted rather than matched: a default can hold braces of its own,
+---and a `\}` inside one is text.
+---@param text string
+---@param from integer Index of the `{`
+---@return integer?
+local function closes_at(text, from)
+  local depth, index = 0, from
+  while index <= #text do
+    local char = text:sub(index, index)
+    if char == '\\' then
+      index = index + 1
+    elseif char == '{' then
+      depth = depth + 1
+    elseif char == '}' then
+      depth = depth - 1
+      if depth == 0 then
+        return index + 1
+      end
     end
-    value = value or nil
+    index = index + 1
   end
+  return nil
+end
 
-  -- The result is re-parsed as snippet text, so a '$' or '}' out of a
-  -- clipboard has to stop being syntax.
-  return value and (value:gsub('[\\%$}]', '\\%0'))
+---`${VAR:default}` and `${VAR/regex/format/}` -- the two forms whose contents
+---have to be found rather than matched, so they are scanned rather than
+---gsub'd. Only bodies that hold one pay for the scan; the `find` below is the
+---whole cost for the rest.
+---
+---Both collapse to the plain value. The default is dropped because we have one
+---(and |vim.snippet.expand()| would discard it too -- for an unknown name it
+---inserts the *name*, not the default). The transform is dropped because
+---Neovim implements none: `${TM_FILENAME/(.*)%..*/$1/}` already inserts the
+---whole filename today, so a resolved variable behaves the same way.
+---@param body string
+---@return string
+local function resolve_delimited(body)
+  local out, index = {}, 1
+  while true do
+    local at = body:find('%${[A-Z_][A-Z_0-9]*[:/]', index)
+    if not at then
+      break
+    end
+    local name = body:match('^%${([A-Z_][A-Z_0-9]*)', at)
+    local stop = not escaped(body, at) and closes_at(body, at + 1) or nil
+    local value = stop and value_of(name) or nil
+    if stop and value then
+      out[#out + 1] = body:sub(index, at - 1)
+      out[#out + 1] = escape(value)
+      index = stop
+    else
+      -- Past the `$` only: a name we do not know may still contain one we do.
+      out[#out + 1] = body:sub(index, at)
+      index = at + 1
+    end
+  end
+  if #out == 0 then
+    return body
+  end
+  out[#out + 1] = body:sub(index)
+  return table.concat(out)
 end
 
 ---@param body string
@@ -189,10 +307,11 @@ local function resolve(body)
   if not body:find('$', 1, true) then
     return body
   end
+  body = resolve_delimited(body)
   subject = body
   body = body:gsub('()%${([A-Z_][A-Z_0-9]*)}', substitute)
-  -- The first pass rewrote it, so the positions the second one reports are
-  -- into a different string.
+  -- Each pass rewrote it, so the positions the next one reports are into a
+  -- different string.
   subject = body
   return (body:gsub('()%$([A-Z_][A-Z_0-9]*)', substitute))
 end
@@ -239,21 +358,31 @@ function M.editable_final_tabstop(body)
   end))
 end
 
+---Everything a raw body needs before |vim.snippet.expand()| may be handed it:
+---renumber the final tabstop, then accept or reject. Nil is "unusable, drop
+---it". The registry does this at load time for a written body and `text()`
+---below at call time for a produced one; keeping the pair here is what stops
+---the two paths guaranteeing different things.
+---@param raw string
+---@return string?
+function M.normalize(raw)
+  local text = M.editable_final_tabstop(raw)
+  return M.expandable(text) and text or nil
+end
+
 ---@param snippet zsnip.Snippet
 ---@return string?
 local function text(snippet)
-  local body = snippet.body
-  if type(body) == 'function' then
-    local ok, produced = pcall(body)
+  local raw = snippet.body
+  if type(raw) == 'function' then
+    local ok, produced = pcall(raw)
     if not ok or type(produced) ~= 'string' then
       return nil
     end
-    body = M.editable_final_tabstop(produced)
-    if not M.expandable(body) then
-      return nil
-    end
+    local normalized = M.normalize(produced)
+    return normalized and resolve(normalized) or nil
   end
-  return resolve(body)
+  return resolve(raw)
 end
 
 ---Turn a snippet's body into the text handed to |vim.snippet.expand()|.

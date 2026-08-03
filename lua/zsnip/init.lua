@@ -20,6 +20,11 @@ local registry = require('zsnip.registry')
 
 local M = {}
 
+---The plugin's own version. Kept in step with the tag by release-please --
+---see `release-please-config.json` -- so that a bug report can say which zsnip
+---it is about, which `:checkhealth zsnip` asks for.
+M.version = '0.1.0' -- x-release-please-version
+
 ---Optional: every default works without it. It configures filetype
 ---inheritance and completion behaviour, and creates the `:ZSnip` command.
 ---@param opts? zsnip.Config
@@ -27,6 +32,8 @@ function M.setup(opts)
   config.setup(opts)
   if config.options.command ~= false then
     require('zsnip.commands').create()
+  else
+    require('zsnip.commands').remove()
   end
 end
 
@@ -95,6 +102,12 @@ end
 ---@param opts? zsnip.LspOpts
 function M.start_lsp_server(opts)
   require('zsnip.lsp').start(opts)
+end
+
+---Stop the in-process server: the autocmd that attaches it goes, and so do the
+---clients it attached. Idempotent.
+function M.stop_lsp_server()
+  require('zsnip.lsp').stop()
 end
 
 ---Resolve the snippet variables Neovim does not know (CURRENT_YEAR, UUID,

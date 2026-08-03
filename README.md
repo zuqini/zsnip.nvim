@@ -48,17 +48,24 @@ What that leaves zsnip to do, it does completely:
   turns every other variable into a tabstop holding its own name — which is
   why an unpatched `copyright` snippet inserts a literal `CURRENT_YEAR`.
   zsnip resolves the date, workspace, comment-marker, clipboard, `UUID` and
-  `RANDOM` families before the body reaches the engine — and escapes what it
-  substitutes, so a clipboard holding `$1` or `50%` lands as text instead of
-  turning into a tabstop or being eaten as a pattern.
-- **Bodies core cannot parse.** ~4% of friendly-snippets' bodies fail the LSP
-  snippet grammar. Expanding one raises *after* the completion engine has
+  `RANDOM` families before the body reaches the engine — in all four
+  spellings, `$VAR`, `${VAR}`, `${VAR:default}` and `${VAR/regex/format/}` —
+  and escapes what it substitutes, so a clipboard holding `$1` or `50%` lands
+  as text instead of turning into a tabstop or being eaten as a pattern.
+- **Bodies core cannot take.** ~4% of friendly-snippets' bodies fail the LSP
+  snippet grammar, and others parse but hit an assert inside
+  `vim.snippet.expand()` — a second `$0`, or two placeholders that disagree
+  about a tabstop. Either way it raises *after* the completion engine has
   deleted the word you typed, so it takes the word with it. zsnip drops them
   on load instead.
 - **`${0:text}`.** Core treats `$0` strictly as the exit point, so a
   placeholder sitting on it lands in the buffer unreachable — and a body whose
   only tabstop is `$0` gets no session at all. zsnip renumbers it past the
   last real tabstop.
+- **Triggers that are not words.** `<div`, `#!`, `console.log`. Every source
+  tells the menu to replace the whole non-blank run before the cursor, so a
+  trigger that starts with a symbol is offered at all and lands over what you
+  typed rather than after it.
 - **Whichever menu you use — including none.** Four ways to serve the same
   snippets, so the choice of completion engine is not also a choice of snippet
   plugin:
@@ -175,10 +182,11 @@ require('zsnip.complete').enable({ complete = false })
 already knows how to consume:
 
 ```lua
--- vim.lsp.completion only asks on the characters a server names, and a
--- trigger can begin with any of them -- `2x1table` and `#!` are real
--- friendly-snippets triggers -- so name every printable one. blink and
--- nvim-cmp ask on their own cadence and need none of this.
+-- Only needed for autotrigger: vim.lsp.completion asks unprompted on the
+-- characters a server names, and a trigger can begin with any of them --
+-- `2x1table` and `#!` are real friendly-snippets triggers -- so name every
+-- printable one. blink and nvim-cmp ask on their own cadence and need none of
+-- this, and neither does <C-x><C-o>.
 local triggers = {}
 for byte = 33, 126 do
   triggers[#triggers + 1] = string.char(byte)
@@ -248,10 +256,18 @@ require('zsnip').setup({
   max_items = 100,          -- default cap for completion_items() and for
                             -- zsnip.complete; blink/cmp/lsp ask for an
                             -- uncapped list and let their engine filter it
-  documentation = true,     -- attach the body as item documentation
+  documentation = true,     -- attach the body and description to items
   command = true,           -- create :ZSnip
 })
 ```
+
+An unknown key, or a known one of the wrong type, is reported with
+`vim.notify` and otherwise ignored — the rest of the config still applies.
+
+Both loaders also take `paths`, `include` and `exclude`; a VSCode `paths` entry
+may be a package with a `package.json` or a directory of loose snippet files,
+so `~/.config/Code/User/snippets` works as-is — comments and trailing commas
+included, which VSCode's own files are full of.
 
 ## Commands
 
@@ -261,10 +277,12 @@ require('zsnip').setup({
 | `:ZSnip list` | Show every snippet the current filetype has, and where each came from |
 | `:ZSnip reload` | Forget everything read from disk and rescan |
 
-`:checkhealth zsnip` reports the engine, the registered loaders, how much was
-actually found, and whether anything is serving it — a snippet that was found
-still needs one of the four wirings below to reach a menu. It can see two of
-them (the LSP server and `zsnip.complete`) and warns if both are on at once.
+`:checkhealth zsnip` reports both versions, the registered loaders and the
+paths each was given, how much was actually found, how many bodies were dropped
+for being ones `vim.snippet.expand()` will not take, and whether anything is
+serving them — a snippet that was found still needs one of the four wirings
+above to reach a menu. It can see two of them (the LSP server and
+`zsnip.complete`) and warns if both are on at once.
 
 ## Coming from LuaSnip
 

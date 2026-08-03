@@ -13,6 +13,51 @@ function M.read_lines(path)
   return ok and lines or nil
 end
 
+---Strip what JSON does not allow and VSCode's snippet files are full of:
+---`//` and `/* */` comments, and a comma before a closing brace or bracket.
+---VSCode *generates* every user snippet file with a comment block at the top,
+---and most people leave it there -- so without this, pointing `paths` at
+---`~/.config/Code/User/snippets` reads nothing and says nothing.
+---
+---String-aware, since a body is far more likely to contain `//` than the file
+---is to contain a comment. Only run when a plain decode has already failed, so
+---a well-formed pack never pays for it.
+---@param text string
+---@return string
+local function strip_json_comments(text)
+  local out, index, length = {}, 1, #text
+  while index <= length do
+    local char = text:sub(index, index)
+    if char == '"' then
+      local from = index
+      index = index + 1
+      while index <= length do
+        local inner = text:sub(index, index)
+        if inner == '\\' then
+          index = index + 2
+        elseif inner == '"' then
+          index = index + 1
+          break
+        else
+          index = index + 1
+        end
+      end
+      out[#out + 1] = text:sub(from, index - 1)
+    elseif char == '/' and text:sub(index + 1, index + 1) == '/' then
+      index = (text:find('\n', index, true) or length + 1)
+    elseif char == '/' and text:sub(index + 1, index + 1) == '*' then
+      local stop = text:find('*/', index + 2, true)
+      index = stop and stop + 2 or length + 1
+    else
+      out[#out + 1] = char
+      index = index + 1
+    end
+  end
+  -- Whitespace and newlines survived above, so a trailing comma is whatever
+  -- sits between the comma and the bracket that closes it.
+  return (table.concat(out):gsub(',(%s*[%]}])', '%1'))
+end
+
 ---@param path string
 ---@return table?
 function M.read_json(path)
@@ -20,7 +65,11 @@ function M.read_json(path)
   if not lines then
     return nil
   end
-  local ok, decoded = pcall(vim.json.decode, table.concat(lines, '\n'), { luanil = { object = true } })
+  local text = table.concat(lines, '\n')
+  local ok, decoded = pcall(vim.json.decode, text, { luanil = { object = true } })
+  if not ok then
+    ok, decoded = pcall(vim.json.decode, strip_json_comments(text), { luanil = { object = true } })
+  end
   return (ok and type(decoded) == 'table') and decoded or nil
 end
 

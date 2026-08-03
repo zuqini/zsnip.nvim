@@ -19,6 +19,8 @@ local MINIMAL_CONFIG = table.concat({
 local function check_environment()
   vim.health.start('Environment')
 
+  vim.health.info('zsnip ' .. require('zsnip').version)
+
   if vim.fn.has('nvim-0.12') == 1 then
     vim.health.ok('Neovim ' .. tostring(vim.version()) .. ' (>= 0.12.0 required)')
   else
@@ -45,8 +47,9 @@ local function check_loaders()
 
   local enabled = {}
   for _, kind in ipairs({ 'vscode', 'snipmate' }) do
-    if registry.enabled(kind) then
-      enabled[#enabled + 1] = kind
+    local opts = registry.loader(kind)
+    if opts then
+      enabled[#enabled + 1] = { kind = kind, opts = opts }
     end
   end
 
@@ -57,7 +60,20 @@ local function check_loaders()
     })
     return
   end
-  vim.health.ok('loaders: ' .. table.concat(enabled, ', '))
+
+  for _, loader in ipairs(enabled) do
+    vim.health.ok('loader: ' .. loader.kind)
+    -- A path that does not exist finds nothing and says nothing, and a typo in
+    -- one looks exactly like the loader not working.
+    for _, path in ipairs(loader.opts.paths or {}) do
+      local expanded = vim.fs.normalize(path)
+      if vim.fn.isdirectory(expanded) == 1 then
+        vim.health.info(('  path: %s'):format(expanded))
+      else
+        vim.health.warn(('  path does not exist: %s'):format(expanded))
+      end
+    end
+  end
 end
 
 local function check_snippets()
@@ -83,6 +99,12 @@ local function check_snippets()
   local filetype = vim.bo.filetype
   if filetype ~= '' then
     vim.health.info(('current filetype (%s): %d snippet(s)'):format(filetype, #registry.get(filetype)))
+  end
+
+  -- The other half of "my snippet is missing": it was found and then dropped.
+  local dropped = registry.dropped()
+  if dropped > 0 then
+    vim.health.info(('%d body/bodies dropped — vim.snippet.expand() will not take them'):format(dropped))
   end
 end
 
@@ -140,8 +162,7 @@ local function check_bug_report()
     'Reproduce with a minimal config, then open an issue at',
     ISSUES_URL .. ' including:',
     '  - the minimal config below (edited to trigger the bug)',
-    '  - the full :checkhealth zsnip output',
-    '  - your Neovim version (nvim --version)',
+    '  - the full :checkhealth zsnip output (it carries both versions)',
     '',
     'Minimal config — save as repro.lua, run with: nvim -u repro.lua',
     '',

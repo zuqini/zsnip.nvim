@@ -91,3 +91,29 @@ describe('snipmate.parse', function()
     assert.are.same({}, snipmate.parse(snippets_file('snippet empty')))
   end)
 end)
+
+describe('the snipmate parser on blank lines', function()
+  -- A blank line between the header and the body is how the format is often
+  -- laid out. Counted as part of the snippet, it puts an empty line in front
+  -- of every such expansion.
+  it('ignores one between a header and its body', function()
+    local snippets = snipmate.parse(snippets_file('snippet hi\n\n\tfoo\n\tbar'))
+
+    assert.are.equal(1, #snippets)
+    assert.are.equal('foo\nbar', snippets[1].body)
+  end)
+
+  it('keeps one inside a body', function()
+    local snippets = snipmate.parse(snippets_file('snippet hi\n\tfoo\n\n\tbar'))
+
+    assert.are.equal('foo\n\nbar', snippets[1].body)
+  end)
+
+  it('keeps blank lines between entries out of both', function()
+    local snippets = snipmate.parse(snippets_file('snippet a\n\tone\n\n\nsnippet b\n\n\ttwo'))
+
+    assert.are.equal(2, #snippets)
+    assert.are.equal('one', snippets[1].body)
+    assert.are.equal('two', snippets[2].body)
+  end)
+end)

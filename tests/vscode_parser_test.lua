@@ -131,3 +131,57 @@ describe('vscode.contributions', function()
     assert.are.same({}, vscode.contributions('/nowhere/package.json'))
   end)
 end)
+
+describe('the VSCode parser on files as VSCode writes them', function()
+  ---@param json string
+  ---@return string path
+  local function raw_file(json)
+    local path = helpers.tempdir() .. '/snippets.json'
+    helpers.write(path, json)
+    return path
+  end
+
+  -- VSCode *generates* every user snippet file with this comment block, and
+  -- most people leave it. vim.json.decode refuses the file outright, so
+  -- pointing `paths` at ~/.config/Code/User/snippets used to read nothing --
+  -- and say nothing about why.
+  it('reads a file with line comments', function()
+    local snippets = vscode.parse(raw_file([[
+{
+  // Place your snippets for lua here. Each snippet is defined under
+  // a snippet name and has a "prefix" and a "body".
+  "Print": { "prefix": "log", "body": "print($1)" }
+}]]))
+
+    assert.are.equal(1, #snippets)
+    assert.are.equal('log', snippets[1].prefix)
+  end)
+
+  it('reads a file with block comments and a trailing comma', function()
+    local snippets = vscode.parse(raw_file([[
+{
+  /* a header
+     over two lines */
+  "Print": { "prefix": "log", "body": "print($1)" },
+}]]))
+
+    assert.are.equal(1, #snippets)
+    assert.are.equal('log', snippets[1].prefix)
+  end)
+
+  -- A body is far more likely to hold `//` than the file is to hold a comment.
+  it('leaves a comment marker inside a string alone', function()
+    local snippets = vscode.parse(raw_file([[
+{
+  // real comment
+  "Url": { "prefix": "url", "body": "https://example.com/*$1*/" },
+}]]))
+
+    assert.are.equal(1, #snippets)
+    assert.are.equal('https://example.com/*$1*/', snippets[1].body)
+  end)
+
+  it('still refuses a file that is not JSON at all', function()
+    assert.are.same({}, vscode.parse(raw_file('this is not json')))
+  end)
+end)

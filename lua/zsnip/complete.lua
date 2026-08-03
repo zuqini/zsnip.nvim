@@ -45,21 +45,13 @@ local function is_source(entry)
   return entry == SOURCE or entry:match(CAPPED) ~= nil
 end
 
----Where the run under the cursor starts, as a 0-based byte column.
----
----The whole non-blank run, not a keyword. What this returns is the range Vim
----replaces on accept, and a third of real triggers mix the two classes:
----`console.log` and `if(` put a symbol after word characters, `<div` and
----`#!/usr/bin/env` put one before. Stopping at the keyword boundary would
----leave the rest of what was typed in front of the expansion -- `console.`
----followed by the body of `console.log`. Triggers never contain a space, so
----the run can never be too short.
+---Where the run under the cursor starts, as a 0-based byte column. The rule
+---itself lives in `zsnip.completion`, which needs the same answer to anchor a
+---`textEdit` for the other three sources.
 ---@return integer
 local function run_start()
   local col = vim.api.nvim_win_get_cursor(0)[2]
-  local before = vim.api.nvim_get_current_line():sub(1, col)
-  local start = vim.fn.match(before, [[\S\+$]])
-  return start == -1 and col or start
+  return completion.run_start(vim.api.nvim_get_current_line(), col)
 end
 
 ---Snippets for what was typed, and how much of it is not theirs.
@@ -69,22 +61,23 @@ end
 ---snippet. So a run that matches nothing is tried again from its last keyword,
 ---and the part skipped is kept out of the expansion.
 ---@param base string
----@return lsp.CompletionItem[], string kept
+---@return zsnip.Match[], boolean documented, string kept
 local function matching(base)
-  local function items(prefix)
-    return completion.items(vim.tbl_extend('force', options, { prefix = prefix }))
+  local function matches(prefix)
+    return completion.matches(vim.tbl_extend('force', options, { prefix = prefix }))
   end
 
-  local matched = items(base)
+  local matched, documented = matches(base)
   if #matched > 0 then
-    return matched, ''
+    return matched, documented, ''
   end
 
   local tail = base:match('()[%w_]+$')
   if not tail or tail == 1 then
-    return matched, ''
+    return matched, documented, ''
   end
-  return items(base:sub(tail)), base:sub(1, tail - 1)
+  matched, documented = matches(base:sub(tail))
+  return matched, documented, base:sub(1, tail - 1)
 end
 
 ---The 'complete' function source. See |complete-functions|.
@@ -96,21 +89,22 @@ function M.completefunc(findstart, base)
     return run_start()
   end
 
-  local matched, kept = matching(base)
+  local matched, documented, kept = matching(base)
 
   local items = {}
-  for _, item in ipairs(matched) do
+  for _, match in ipairs(matched) do
+    local prefix = match.snippet.prefix
     items[#items + 1] = {
       -- `word` covers everything Vim replaces, so it carries `kept` back;
       -- `abbr` is what the menu shows, which is the trigger alone.
-      word = kept .. item.label,
-      abbr = item.label,
+      word = kept .. prefix,
+      abbr = prefix,
       kind = 'Snippet',
-      menu = item.detail or '',
-      info = item.insertText,
+      menu = documented and match.snippet.description or '',
+      info = documented and match.text or '',
       -- The body travels with the item: by the time it is accepted the menu
       -- that produced it is gone, and CompleteDone gets only this.
-      user_data = { zsnip = { body = item.insertText, keep = #kept } },
+      user_data = { zsnip = { body = match.text, keep = #kept } },
     }
   end
 
@@ -133,9 +127,13 @@ local function expand()
   -- the run were never the snippet's. The trigger is replaced; the rest stays.
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
   local start = col - #completed.word + (data.keep or 0)
-  if start >= 0 and start < col then
-    vim.api.nvim_buf_set_text(0, row - 1, start, row - 1, col, {})
+  if start < 0 or start >= col then
+    -- The range the trigger should have occupied is not in the buffer, so
+    -- something moved between the accept and here. Expanding anyway would put
+    -- the body next to the trigger rather than over it.
+    return
   end
+  vim.api.nvim_buf_set_text(0, row - 1, start, row - 1, col, {})
   vim.snippet.expand(data.body)
 end
 

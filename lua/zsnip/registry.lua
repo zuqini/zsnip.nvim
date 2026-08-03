@@ -25,32 +25,38 @@ local M = {}
 ---@field parsed table<string, table<string, zsnip.Snippet[]>> Normalized snippets, per file path then language
 ---@field cache table<string, zsnip.Snippet[]>
 ---@field scanned_rtp string?
+---@field dropped_parsed integer Bodies read from disk that |vim.snippet.expand()| would not take
+---@field dropped_added integer The same, for snippets registered through the API -- which a rescan does not re-read
 ---@field options zsnip.Config The options table `cache` was resolved under
 local state
 
 ---Drop everything derived from the filesystem. Kept separate from clear() so
 ---`:ZSnip reload` does not throw away snippets added from a user's config.
+---
+---The one definition of what "derived" means: the two callers below re-derive
+---parts of it, and a field that is added here but missed there is a stale
+---answer nothing invalidates.
 function M.invalidate()
   state.sources = nil
   state.parsed = {}
   state.cache = {}
   state.inherited = {}
   state.scanned_rtp = nil
+  state.dropped_parsed = 0
 end
 
 ---Full reset, including registered loaders and snippets. Used by tests.
 function M.clear()
+  -- Everything derived is left to invalidate() below rather than listed twice.
+  ---@diagnostic disable-next-line: missing-fields
   state = {
     loaders = {},
     added = {},
     extend = {},
-    inherited = {},
-    sources = nil,
-    parsed = {},
-    cache = {},
-    scanned_rtp = nil,
+    dropped_added = 0,
     options = config.options,
   }
+  M.invalidate()
 end
 
 M.clear()
@@ -61,24 +67,32 @@ M.clear()
 ---the typed word and the raised error takes the word with it.
 ---@param snippets zsnip.Snippet[]
 ---@param filetype string
----@return zsnip.Snippet[]
+---@return zsnip.Snippet[] normalized
+---@return integer dropped
 local function normalize(snippets, filetype)
-  local normalized = {}
+  local normalized, dropped = {}, 0
   for _, snippet in ipairs(snippets) do
     local raw = snippet.body
     if type(snippet.prefix) == 'string' and snippet.prefix ~= '' then
       if type(raw) == 'function' then
+        -- A function body is normalized when it produces one; there is
+        -- nothing to check here yet. See `body.text()`.
         normalized[#normalized + 1] = vim.tbl_extend('force', snippet, { filetype = filetype })
       elseif type(raw) == 'string' then
-        local text = body.editable_final_tabstop(raw)
-        if body.expandable(text) then
+        local text = body.normalize(raw)
+        if text then
           normalized[#normalized + 1] =
             vim.tbl_extend('force', snippet, { body = text, filetype = filetype })
+        else
+          -- Counted rather than reported: this runs from inside a completion
+          -- request, where a message per malformed body in someone else's
+          -- pack would be unusable. `:checkhealth zsnip` reads the total.
+          dropped = dropped + 1
         end
       end
     end
   end
-  return normalized
+  return normalized, dropped
 end
 
 ---@param opts zsnip.LoaderOpts
@@ -102,6 +116,35 @@ local function record(sources, language, source)
   table.insert(sources[language], source)
 end
 
+---The files under `dir` ending in `suffix`, with the subdirectory each was
+---found in (nil at the top level) and its name without the suffix.
+---
+---`vim.fs.dir` rather than `vim.fn.glob`: a configured path is data, not a
+---pattern, and a `[` anywhere in one makes glob() match nothing at all -- for
+---that whole directory, silently. It is also the cheaper of the two.
+---@param dir string
+---@param suffix string
+---@param depth integer 1 for the directory itself, 2 to include one level down
+---@return { path: string, parent: string?, base: string }[]
+local function files(dir, suffix, depth)
+  local found = {}
+  local ok, iterator = pcall(vim.fs.dir, dir, { depth = depth })
+  if not ok then
+    return found
+  end
+  for name, kind in iterator do
+    if kind == 'file' and vim.endswith(name, suffix) then
+      local parent, base = name:match('^(.*)/([^/]+)$')
+      found[#found + 1] = {
+        path = vim.fs.normalize(dir .. '/' .. name),
+        parent = parent,
+        base = (base or name):sub(1, -#suffix - 1),
+      }
+    end
+  end
+  return found
+end
+
 ---Snippet files sitting loose in a directory, the way VSCode keeps a user's
 ---own: `<language>.json` named after the filetype it serves, and
 ---`*.code-snippets` whose snippets name their languages individually. Only
@@ -119,15 +162,14 @@ local function scan_standalone(sources, opts, dir, claimed)
     end
   end
 
-  for _, path in ipairs(vim.fn.glob(dir .. '/*.json', true, true)) do
-    path = vim.fs.normalize(path)
-    if vim.fs.basename(path) ~= 'package.json' and not claimed[path] then
-      keep(vim.fn.fnamemodify(path, ':t:r'), path)
+  for _, file in ipairs(files(dir, '.json', 1)) do
+    if file.base ~= 'package' and not claimed[file.path] then
+      keep(file.base, file.path)
     end
   end
 
-  for _, path in ipairs(vim.fn.glob(dir .. '/*.code-snippets', true, true)) do
-    path = vim.fs.normalize(path)
+  for _, file in ipairs(files(dir, '.code-snippets', 1)) do
+    local path = file.path
     if not claimed[path] then
       local languages, unscoped = PARSERS.vscode.scopes(path)
       for _, language in ipairs(languages) do
@@ -172,21 +214,24 @@ end
 ---@param opts zsnip.LoaderOpts
 local function scan_snipmate(sources, opts)
   ---@type { path: string, language: string }[]
-  local files = {}
+  local found = {}
   local function collect(paths, modifier)
     for _, path in ipairs(paths) do
-      files[#files + 1] = { path = vim.fs.normalize(path), language = vim.fn.fnamemodify(path, modifier) }
+      found[#found + 1] = { path = vim.fs.normalize(path), language = vim.fn.fnamemodify(path, modifier) }
     end
   end
 
   collect(vim.api.nvim_get_runtime_file('snippets/*.snippets', true), ':t:r')
   collect(vim.api.nvim_get_runtime_file('snippets/*/*.snippets', true), ':h:t')
   for _, dir in ipairs(util.list(opts.paths)) do
-    collect(vim.fn.glob(dir .. '/*.snippets', true, true), ':t:r')
-    collect(vim.fn.glob(dir .. '/*/*.snippets', true, true), ':h:t')
+    -- A directory of them is named after the filetype it serves; a loose file
+    -- is named after it directly.
+    for _, file in ipairs(files(vim.fs.normalize(dir), '.snippets', 2)) do
+      found[#found + 1] = { path = file.path, language = file.parent or file.base }
+    end
   end
 
-  for _, file in ipairs(files) do
+  for _, file in ipairs(found) do
     if wanted(opts, file.language) then
       record(sources, file.language, { kind = 'snipmate', path = file.path })
     end
@@ -212,11 +257,9 @@ local function ensure_scanned()
     scan_snipmate(sources, state.loaders.snipmate)
   end
 
+  M.invalidate()
   state.sources = sources
   state.scanned_rtp = rtp
-  state.parsed = {}
-  state.cache = {}
-  state.inherited = {}
 end
 
 ---`extend` and `global_filetype` are resolved into the per-filetype cache, so
@@ -227,11 +270,11 @@ end
 local function ensure_current()
   if state.options ~= config.options then
     state.options = config.options
-    state.cache = {}
     -- Discovery reads `global_filetype` too, to decide which bucket an
     -- unscoped `.code-snippets` entry belongs to, so what was found under the
-    -- old options has to go with what was resolved from it.
-    state.sources = nil
+    -- old options has to go with what was resolved from it -- which is
+    -- everything invalidate() drops.
+    M.invalidate()
   end
 end
 
@@ -268,8 +311,10 @@ local function parse(source, language)
     state.inherited[language] = vim.list_extend(state.inherited[language] or {}, extends)
   end
 
-  per_language[language] = normalize(snippets, language)
-  return per_language[language]
+  local normalized, dropped = normalize(snippets, language)
+  state.dropped_parsed = state.dropped_parsed + dropped
+  per_language[language] = normalized
+  return normalized
 end
 
 ---@param filetype string
@@ -326,17 +371,32 @@ function M.enable(kind, opts)
   M.invalidate()
 end
 
+---The options a loader was registered with, or nil if it never was. The paths
+---are the answer to "why does it find nothing", so this hands back what was
+---given rather than just whether anything was.
 ---@param kind zsnip.LoaderKind
----@return boolean
-function M.enabled(kind)
-  return state.loaders[kind] ~= nil
+---@return zsnip.LoaderOpts?
+function M.loader(kind)
+  return state.loaders[kind]
+end
+
+---How many bodies were dropped for being ones |vim.snippet.expand()| would
+---not take. The file-derived half resets whenever what was read from disk
+---does; what came through |zsnip.add_snippets()| lasts until clear().
+---@return integer
+function M.dropped()
+  return state.dropped_parsed + state.dropped_added
 end
 
 ---@param filetype string
 ---@param snippets zsnip.Snippet[]
 function M.add(filetype, snippets)
+  local normalized, dropped = normalize(snippets, filetype)
   state.added[filetype] = state.added[filetype] or {}
-  vim.list_extend(state.added[filetype], normalize(snippets, filetype))
+  vim.list_extend(state.added[filetype], normalized)
+  -- Not part of what invalidate() drops: a rescan does not re-read these, so
+  -- resetting the count with the parsed one would lose it.
+  state.dropped_added = state.dropped_added + dropped
   state.cache = {}
 end
 
@@ -371,8 +431,14 @@ function M.get(filetype)
 
     vim.list_extend(snippets, state.added[language] or {})
     for _, source in ipairs(state.sources[language] or {}) do
-      if not seen_path[source.path] then
-        seen_path[source.path] = true
+      -- Per path *and* language, matching `parse()`: one `.code-snippets`
+      -- file serves several, and each visit hands back only what is in scope
+      -- for the language asked about. Keyed on the path alone, a typescript
+      -- buffer that inherits javascript sees the file once -- as typescript --
+      -- and the javascript snippets in it are silently gone.
+      local visit = source.path .. '\0' .. language
+      if not seen_path[visit] then
+        seen_path[visit] = true
         vim.list_extend(snippets, parse(source, language))
       end
     end

@@ -33,16 +33,26 @@
 ---@field prefix? string Keyword to fuzzy-match triggers against; unset returns everything
 ---@field filetype? string Defaults to the filetype of `bufnr`
 ---@field bufnr? integer Defaults to the current buffer
+---@field position? lsp.Position Cursor the response is anchored to; defaults to the real one when `bufnr` is the current buffer
 ---@field limit? integer Overrides `max_items`
 ---@field documentation? boolean Overrides the configured default
 ---@field filter? fun(snippet: zsnip.Snippet): boolean Keep only the snippets this returns true for
 
----What the three built-in sources (`zsnip.lsp`, `zsnip.blink`, `zsnip.cmp`)
----forward to |zsnip.completion_items()|, on top of whatever their own engine
----needs. The names match `zsnip.CompletionOpts` so they pass straight through.
+---One snippet selected for a request, with its body resolved and ready for
+---|vim.snippet.expand()|. What `zsnip.complete` builds its menu entries from,
+---and what an `lsp.CompletionItem` is projected out of.
+---@class zsnip.Match
+---@field snippet zsnip.Snippet
+---@field text string
+---@field ranked boolean Whether zsnip ordered the response, rather than leaving it to the client
+
+---What the four built-in sources (`zsnip.lsp`, `zsnip.blink`, `zsnip.cmp` and
+---`zsnip.complete`) forward to the completion layer, on top of whatever their
+---own engine needs. The names match `zsnip.CompletionOpts` so they pass
+---straight through.
 ---@class zsnip.SourceOpts
----@field limit? integer Cap on items per response (default: uncapped -- the engine filters)
----@field documentation? boolean Attach the body as item documentation
+---@field limit? integer Cap on items per response. The three LSP-shaped sources default to uncapped -- the engine filters; `zsnip.complete` matches for itself, so it defaults to `max_items`
+---@field documentation? boolean Attach the body and description to the item
 ---@field filter? fun(snippet: zsnip.Snippet): boolean Keep only the snippets this returns true for
 
 ---A discovered snippet file, before it is read.

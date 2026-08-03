@@ -71,6 +71,13 @@ end
 
 local ACTIONS = { expand = expand, list = list, reload = reload }
 
+---Remove `:ZSnip` if it is there. `setup { command = false }` has to be able
+---to undo a `setup()` that ran before it -- under a lazy plugin manager the
+---second call is the user's and the first was a dependency's default.
+function M.remove()
+  pcall(vim.api.nvim_del_user_command, 'ZSnip')
+end
+
 function M.create()
   vim.api.nvim_create_user_command('ZSnip', function(args)
     local action = ACTIONS[args.args ~= '' and args.args or 'expand']
