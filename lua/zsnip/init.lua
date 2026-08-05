@@ -23,7 +23,7 @@ local M = {}
 ---The plugin's own version. Kept in step with the tag by release-please --
 ---see `release-please-config.json` -- so that a bug report can say which zsnip
 ---it is about, which `:checkhealth zsnip` asks for.
-M.version = '0.1.0' -- x-release-please-version
+M.version = '0.2.0' -- x-release-please-version
 
 ---Optional: every default works without it. It configures filetype
 ---inheritance and completion behaviour, and creates the `:ZSnip` command.
