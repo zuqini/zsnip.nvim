@@ -292,8 +292,12 @@ capped setup is recognised rather than appended to twice.
 enable() takes the same `limit`, `documentation` and `filter` as the other
 sources -- except that `limit` defaults to `max_items` here rather than to
 uncapped, since nothing downstream trims what this source returns.
-`documentation = false` drops the description from the menu and the body from
-the preview window, and disable() undoes both halves of enable(). It deliberately leaves
+The description and the body both go to the preview window, where
+|vim.lsp.completion| puts an item's detail -- the menu row stays the trigger
+and its kind alone. `description_style = 'classic'` keeps the description in
+the menu row instead, visible without selecting, with the preview holding the
+body alone. `documentation = false` empties both wherever they went, and
+disable() undoes both halves of enable(). It deliberately leaves
 'autocomplete' alone -- whether the menu opens by itself is your decision.
 
 An `expand` function replaces |vim.snippet.expand()| as what turns the

@@ -68,7 +68,8 @@ describe('the complete source', function()
     local item = result.words[1]
     assert.are.equal('req', item.word)
     assert.are.equal('Snippet', item.kind)
-    assert.are.equal('a require', item.menu)
+    assert.is_nil(item.menu)
+    assert.are.equal("a require\n\nrequire '${1:mod}'", item.info)
     assert.are.equal("require '${1:mod}'", item.user_data.zsnip.body)
   end)
 
@@ -254,7 +255,6 @@ describe('the complete source and its options', function()
 
     local item = complete.completefunc(0, 'req').words[1]
     assert.are.equal('', item.info)
-    assert.are.equal('', item.menu)
     -- Still expandable: the body travels in user_data, not in the preview.
     assert.are.equal('b', item.user_data.zsnip.body)
   end)
@@ -265,8 +265,28 @@ describe('the complete source and its options', function()
     complete.enable({ complete = false })
 
     local item = complete.completefunc(0, 'req').words[1]
-    assert.are.equal('b', item.info)
+    assert.are.equal('a require\n\nb', item.info)
+    assert.is_nil(item.menu)
+  end)
+
+  it('keeps the description in the menu row under description_style = classic', function()
+    registry.add('lua', { { prefix = 'req', body = 'b', description = 'a require' } })
+    lua_buffer('req')
+    complete.enable({ complete = false, description_style = 'classic' })
+
+    local item = complete.completefunc(0, 'req').words[1]
     assert.are.equal('a require', item.menu)
+    assert.are.equal('b', item.info)
+  end)
+
+  it('strips the classic menu row when documentation is off too', function()
+    registry.add('lua', { { prefix = 'req', body = 'b', description = 'a require' } })
+    lua_buffer('req')
+    complete.enable({ complete = false, description_style = 'classic', documentation = false })
+
+    local item = complete.completefunc(0, 'req').words[1]
+    assert.is_nil(item.menu)
+    assert.are.equal('', item.info)
   end)
 
   it('caps at max_items like the docs say', function()

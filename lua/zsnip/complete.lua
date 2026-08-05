@@ -23,6 +23,7 @@ local M = {}
 ---@class zsnip.CompleteOpts : zsnip.SourceOpts
 ---@field complete? boolean Add the source to 'complete' (default true). False when the caller sets the option itself.
 ---@field expand? fun(body: string) Expands the accepted snippet (default vim.snippet.expand). For a caller whose user chooses the engine somewhere else.
+---@field description_style? 'lsp'|'classic' Where the description goes: 'lsp' (default) puts it in the preview above the body, where vim.lsp.completion puts an item's detail; 'classic' keeps it in the menu row.
 
 ---What goes in 'complete'. `v:lua` resolves the require at call time, so the
 ---option can be set before this module has loaded. No comma or space in it,
@@ -91,18 +92,31 @@ function M.completefunc(findstart, base)
   end
 
   local matched, documented, kept = matching(base)
+  local classic = options.description_style == 'classic'
 
   local items = {}
   for _, match in ipairs(matched) do
     local prefix = match.snippet.prefix
+    local description = match.snippet.description
+    -- By default the description belongs to the preview, not the menu row: it
+    -- is where vim.lsp.completion puts an item's detail, so snippets read the
+    -- same whichever of zsnip's sources served them. 'classic' is the menu
+    -- row, for a user who wants every description visible without selecting.
+    local menu, info
+    if classic then
+      menu = description or ''
+      info = match.text
+    else
+      info = description and description ~= '' and description .. '\n\n' .. match.text or match.text
+    end
     items[#items + 1] = {
       -- `word` covers everything Vim replaces, so it carries `kept` back;
       -- `abbr` is what the menu shows, which is the trigger alone.
       word = kept .. prefix,
       abbr = prefix,
       kind = 'Snippet',
-      menu = documented and match.snippet.description or '',
-      info = documented and match.text or '',
+      menu = documented and menu or nil,
+      info = documented and info or '',
       -- The body travels with the item: by the time it is accepted the menu
       -- that produced it is gone, and CompleteDone gets only this.
       user_data = { zsnip = { body = match.text, keep = #kept } },
