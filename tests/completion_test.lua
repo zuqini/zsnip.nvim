@@ -25,7 +25,9 @@ describe('completion.items', function()
     assert.are.equal(Kind.Snippet, item.kind)
     assert.are.equal(Format.Snippet, item.insertTextFormat)
     assert.are.equal("require '${1:mod}'", item.insertText)
-    assert.are.equal('require', item.detail)
+    -- Prose stays out of `detail`: clients fence detail as code.
+    assert.is_nil(item.detail)
+    assert.are.equal("require\n\n```lua\nrequire '${1:mod}'\n```", item.documentation.value)
   end)
 
   it('resolves variables into the inserted text', function()
@@ -137,15 +139,14 @@ describe('completion.items', function()
     assert.are.same({ 'mine', 'also' }, labels(items))
   end)
 
-  it('can leave out detail and documentation', function()
+  it('can leave out the documentation', function()
     registry.add('lua', { { prefix = 'a', body = 'b', description = 'desc' } })
 
     local documented = completion.items({ filetype = 'lua' })[1]
-    assert.are.equal('```lua\nb\n```', documented.documentation.value)
+    assert.are.equal('desc\n\n```lua\nb\n```', documented.documentation.value)
 
     local bare = completion.items({ filetype = 'lua', documentation = false })[1]
     assert.is_nil(bare.documentation)
-    assert.is_nil(bare.detail)
   end)
 
   it('takes the filetype from the buffer when none is given', function()

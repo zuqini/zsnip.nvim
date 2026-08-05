@@ -278,11 +278,12 @@ Neovim's built-in completion~
 A function source in 'complete', so snippets rank next to buffer words in one
 menu and 'autocomplete' drives them as you type. Needs Neovim 0.12, where
 'complete' gained a function source. No completion plugin and no LSP client:
-enable() appends one entry to 'complete' and installs a |CompleteDone| handler.
+enable() appends one entry to 'complete' and installs two handlers -- a
+|CompleteDone| expander and a |CompleteChanged| stylist for the preview.
 
 Each source can be capped on its own. Setting 'complete' yourself means enable()
 should not append to it as well, so take the entry from source() and pass
-`complete = false` -- that installs only the |CompleteDone| handler: >lua
+`complete = false` -- that installs only the handlers: >lua
     vim.o.complete = ".^5,w," .. require('zsnip.complete').source() .. '^10'
     require('zsnip.complete').enable({ complete = false })
 <
@@ -292,13 +293,16 @@ capped setup is recognised rather than appended to twice.
 enable() takes the same `limit`, `documentation` and `filter` as the other
 sources -- except that `limit` defaults to `max_items` here rather than to
 uncapped, since nothing downstream trims what this source returns.
-The description and the body both go to the preview window, where
-|vim.lsp.completion| puts an item's detail -- the menu row stays the trigger
-and its kind alone. `description_style = 'classic'` keeps the description in
-the menu row instead, visible without selecting, with the preview holding the
-body alone. `documentation = false` empties both wherever they went, and
-disable() undoes both halves of enable(). It deliberately leaves
-'autocomplete' alone -- whether the menu opens by itself is your decision.
+The preview shows exactly what |vim.lsp.completion| would render for the same
+snippet: the description as prose, then the body syntax-highlighted -- the
+same markdown the LSP-shaped sources put in `documentation`, styled the same
+way (treesitter over the preview float, fences concealed) by the
+|CompleteChanged| handler. The menu row stays the trigger and its kind alone.
+`description_style = 'classic'` keeps the description in the menu row instead,
+visible without selecting, with the preview holding a plain body.
+`documentation = false` empties both wherever they went, and disable() undoes
+everything enable() did. It deliberately leaves 'autocomplete' alone --
+whether the menu opens by itself is your decision.
 
 An `expand` function replaces |vim.snippet.expand()| as what turns the
 accepted body into a session -- for a caller whose user chose a different

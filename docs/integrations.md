@@ -88,10 +88,11 @@ capped setup is still recognised — by `:checkhealth zsnip` too.
 sources. It deliberately does not touch `'autocomplete'`: whether the menu
 opens by itself is your decision, not zsnip's.
 
-The description and the body both land in the preview window, where
-`vim.lsp.completion` puts an item's detail, so the menu row stays the trigger
-and its kind alone. Pass `description_style = 'classic'` to keep the
-description in the menu row instead, visible without selecting.
+The preview shows exactly what `vim.lsp.completion` would render for the same
+snippet — the description as prose, then the body syntax-highlighted — so the
+menu row stays the trigger and its kind alone. Pass `description_style =
+'classic'` to keep the description in the menu row instead, visible without
+selecting, with a plain body in the preview.
 
 Two things are specific to this path:
 

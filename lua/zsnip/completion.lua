@@ -200,6 +200,22 @@ local function replacement(opts, bufnr)
   }
 end
 
+---The one preview text every route shows: the description, then the body
+---fenced for the filetype. `zsnip.complete` renders the same string, so a
+---snippet reads byte-identically whichever source served it.
+---@param snippet zsnip.Snippet
+---@param text string
+---@param filetype string
+---@return string
+function M.document(snippet, text, filetype)
+  local fenced = ('```%s\n%s\n```'):format(filetype, text)
+  local description = snippet.description
+  if description and description ~= '' then
+    return description .. '\n\n' .. fenced
+  end
+  return fenced
+end
+
 ---@param snippet zsnip.Snippet
 ---@param text string
 ---@param filetype string
@@ -208,10 +224,12 @@ local function item(snippet, text, filetype)
   return {
     label = snippet.prefix,
     kind = Kind.Snippet,
-    detail = snippet.description,
+    -- The description rides in `documentation`, not `detail`: clients fence
+    -- `detail` as code in the buffer's filetype -- vim.lsp.completion
+    -- included -- and the description is prose.
     documentation = {
       kind = 'markdown',
-      value = ('```%s\n%s\n```'):format(filetype, text),
+      value = M.document(snippet, text, filetype),
     },
     insertText = text,
     insertTextFormat = Format.Snippet,
@@ -237,7 +255,7 @@ function M.items(opts)
   for index, match in ipairs(matched) do
     local entry = item(match.snippet, match.text, filetype)
     if not documented then
-      entry.detail, entry.documentation = nil, nil
+      entry.documentation = nil
     end
     if edit then
       -- The part of the run that is not the trigger's is buffer text inside

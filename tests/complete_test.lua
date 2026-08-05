@@ -69,7 +69,7 @@ describe('the complete source', function()
     assert.are.equal('req', item.word)
     assert.are.equal('Snippet', item.kind)
     assert.is_nil(item.menu)
-    assert.are.equal("a require\n\nrequire '${1:mod}'", item.info)
+    assert.are.equal("a require\n\n```lua\nrequire '${1:mod}'\n```", item.info)
     assert.are.equal("require '${1:mod}'", item.user_data.zsnip.body)
   end)
 
@@ -265,8 +265,24 @@ describe('the complete source and its options', function()
     complete.enable({ complete = false })
 
     local item = complete.completefunc(0, 'req').words[1]
-    assert.are.equal('a require\n\nb', item.info)
+    assert.are.equal('a require\n\n```lua\nb\n```', item.info)
     assert.is_nil(item.menu)
+  end)
+
+  it('installs the preview stylist next to the expander', function()
+    complete.enable()
+
+    local autocmds = vim.api.nvim_get_autocmds({ group = 'zsnip.complete' })
+    local events = vim.tbl_map(function(autocmd)
+      return autocmd.event
+    end, autocmds)
+    table.sort(events)
+    assert.are.same({ 'CompleteChanged', 'CompleteDone' }, events)
+
+    complete.disable()
+    assert.has_error(function()
+      vim.api.nvim_get_autocmds({ group = 'zsnip.complete' })
+    end)
   end)
 
   it('keeps the description in the menu row under description_style = classic', function()

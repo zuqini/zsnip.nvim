@@ -116,6 +116,10 @@ Items carry `insertTextFormat = Snippet` and a resolved `insertText`, so a
 client expands them with no further work. One item per trigger — the first
 occurrence in shadowing order wins.
 
+The description travels in `documentation` — markdown, as prose above the
+fenced body — never in `detail`, which clients (`vim.lsp.completion` included)
+fence as code in the buffer's filetype.
+
 They also carry a `textEdit` naming the span to replace: the whole non-blank
 run before the cursor. Left to pick that span itself a client picks the keyword
 before the cursor, which is not what a trigger is — `<div` would be filtered

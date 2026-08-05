@@ -23,7 +23,7 @@ local M = {}
 ---@class zsnip.CompleteOpts : zsnip.SourceOpts
 ---@field complete? boolean Add the source to 'complete' (default true). False when the caller sets the option itself.
 ---@field expand? fun(body: string) Expands the accepted snippet (default vim.snippet.expand). For a caller whose user chooses the engine somewhere else.
----@field description_style? 'lsp'|'classic' Where the description goes: 'lsp' (default) puts it in the preview above the body, where vim.lsp.completion puts an item's detail; 'classic' keeps it in the menu row.
+---@field description_style? 'lsp'|'classic' 'lsp' (default) renders the preview the way vim.lsp.completion would -- description above the highlighted body, menu row bare; 'classic' keeps the description in the menu row and the preview a plain body.
 
 ---What goes in 'complete'. `v:lua` resolves the require at call time, so the
 ---option can be set before this module has loaded. No comma or space in it,
@@ -97,17 +97,18 @@ function M.completefunc(findstart, base)
   local items = {}
   for _, match in ipairs(matched) do
     local prefix = match.snippet.prefix
-    local description = match.snippet.description
-    -- By default the description belongs to the preview, not the menu row: it
-    -- is where vim.lsp.completion puts an item's detail, so snippets read the
-    -- same whichever of zsnip's sources served them. 'classic' is the menu
-    -- row, for a user who wants every description visible without selecting.
+    -- By default the description belongs to the preview, not the menu row,
+    -- and the preview carries what vim.lsp.completion would render: the same
+    -- `document()` text the LSP-shaped sources put in `documentation`, styled
+    -- by the CompleteChanged handler below. 'classic' is the menu row and a
+    -- plain body, for a user who wants every description visible without
+    -- selecting.
     local menu, info
     if classic then
-      menu = description or ''
+      menu = match.snippet.description or ''
       info = match.text
     else
-      info = description and description ~= '' and description .. '\n\n' .. match.text or match.text
+      info = completion.document(match.snippet, match.text, vim.bo.filetype)
     end
     items[#items + 1] = {
       -- `word` covers everything Vim replaces, so it carries `kept` back;
@@ -153,6 +154,30 @@ local function expand()
   expand_body(data.body)
 end
 
+---Vim draws an F-source's `info` as plain text, and core's markdown styling
+---is gated on `user_data.nvim.lsp` -- its own items. So zsnip does for its
+---items exactly what |vim.lsp.completion| does for core's: treesitter
+---markdown over the preview float, fences concealed, height fitted to what
+---conceal left visible.
+local function stylize()
+  local completed = vim.v.event.completed_item or {}
+  if vim.tbl_get(completed, 'user_data', 'zsnip') == nil or options.description_style == 'classic' then
+    return
+  end
+
+  -- 'selected' is load-bearing: complete_info() leaves the preview fields
+  -- unset unless it is asked for alongside them (checked on 0.12 nightly).
+  local preview = vim.fn.complete_info({ 'selected', 'preview_winid', 'preview_bufnr' })
+  local winid, bufnr = preview.preview_winid, preview.preview_bufnr
+  if not (winid and bufnr and vim.api.nvim_win_is_valid(winid) and vim.api.nvim_buf_is_valid(bufnr)) then
+    return
+  end
+
+  vim.api.nvim_set_option_value('conceallevel', 2, { win = winid })
+  pcall(vim.treesitter.start, bufnr, 'markdown')
+  vim.api.nvim_win_resize(winid, -1, vim.api.nvim_win_text_height(winid).all)
+end
+
 ---What to put in 'complete' to serve snippets, for a caller that sets the
 ---option itself instead of letting `enable()` append. Append `^{count}` to cap
 ---the source; see |'complete'|. Pair it with `enable({ complete = false })`,
@@ -174,10 +199,9 @@ function M.enable(opts)
     vim.opt.complete:append(SOURCE)
   end
 
-  vim.api.nvim_create_autocmd('CompleteDone', {
-    group = vim.api.nvim_create_augroup(GROUP, { clear = true }),
-    callback = expand,
-  })
+  local group = vim.api.nvim_create_augroup(GROUP, { clear = true })
+  vim.api.nvim_create_autocmd('CompleteDone', { group = group, callback = expand })
+  vim.api.nvim_create_autocmd('CompleteChanged', { group = group, callback = stylize })
 end
 
 ---Whether zsnip is in 'complete' for the current buffer.
