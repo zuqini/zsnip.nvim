@@ -254,7 +254,7 @@ describe('the complete source and its options', function()
     complete.enable({ documentation = false, complete = false })
 
     local item = complete.completefunc(0, 'req').words[1]
-    assert.are.equal('', item.info)
+    assert.is_nil(item.info)
     -- Still expandable: the body travels in user_data, not in the preview.
     assert.are.equal('b', item.user_data.zsnip.body)
   end)
@@ -285,6 +285,52 @@ describe('the complete source and its options', function()
     end)
   end)
 
+  -- The float and its buffer are reused by every item in one menu, so the
+  -- markdown styling a snippet needs must come back off before a plain item
+  -- from another source shows in the same preview.
+  it('styles a snippet preview and takes the styling back off a plain item', function()
+    lua_buffer()
+    complete.enable({ complete = false })
+
+    local completeopt = vim.o.completeopt
+    vim.o.completeopt = 'menuone,noselect,popup'
+
+    -- Registered after enable(), so it observes the preview as stylize() left it.
+    local observed = {}
+    local watcher = vim.api.nvim_create_autocmd('CompleteChanged', {
+      callback = function()
+        local info = vim.fn.complete_info({ 'selected', 'preview_winid', 'preview_bufnr' })
+        if info.preview_winid then
+          observed[#observed + 1] = {
+            conceal = vim.api.nvim_get_option_value('conceallevel', { win = info.preview_winid }),
+            markdown = vim.treesitter.highlighter.active[info.preview_bufnr] ~= nil,
+          }
+        end
+      end,
+    })
+
+    function _G.zsnip_test_complete()
+      vim.fn.complete(1, {
+        { word = 'snip', info = 'desc\n\n```lua\nbody\n```', user_data = { zsnip = { body = 'b', keep = 0 } } },
+        { word = 'plain', info = 'plain text from another source' },
+      })
+      return ''
+    end
+    vim.api.nvim_feedkeys(
+      vim.keycode('i<C-r>=v:lua.zsnip_test_complete()<CR><C-n><C-n><C-e><Esc>'),
+      'x',
+      false
+    )
+
+    vim.api.nvim_del_autocmd(watcher)
+    _G.zsnip_test_complete = nil
+    vim.o.completeopt = completeopt
+
+    assert.are.equal(2, #observed)
+    assert.are.same({ conceal = 2, markdown = true }, observed[1])
+    assert.are.same({ conceal = 0, markdown = false }, observed[2])
+  end)
+
   it('keeps the description in the menu row under description_style = classic', function()
     registry.add('lua', { { prefix = 'req', body = 'b', description = 'a require' } })
     lua_buffer('req')
@@ -302,7 +348,7 @@ describe('the complete source and its options', function()
 
     local item = complete.completefunc(0, 'req').words[1]
     assert.is_nil(item.menu)
-    assert.are.equal('', item.info)
+    assert.is_nil(item.info)
   end)
 
   it('caps at max_items like the docs say', function()

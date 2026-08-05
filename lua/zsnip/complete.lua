@@ -5,16 +5,17 @@
 ---vim.o.autocomplete = true -- optional; CTRL-N works either way
 ---```
 ---
----The one wiring that needs no completion engine and no LSP client: since
----Neovim 0.12 'complete' takes a function source, and 'autocomplete' drives
----the same list as you type. Snippets then rank against buffer words in one
----menu, and 'complete' can cap each source separately (`.^5,F...^10`).
+---The one wiring that needs no completion engine and no LSP client:
+---'complete' takes a function source, and 'autocomplete' drives the same
+---list as you type. Snippets then rank against buffer words in one menu, and
+---'complete' can cap each source separately (`.^5,F...^10`).
 ---
 ---It is also the only source that has to expand the snippet itself. The other
 ---three hand an `lsp.CompletionItem` to something that knows what
 ---`insertTextFormat = Snippet` means -- vim.lsp.completion, blink or nvim-cmp.
----Nothing owns that on this path, so `enable()` installs a |CompleteDone|
----handler and `word` is only ever what the menu displayed.
+---Nothing owns that on this path, so `enable()` installs two handlers -- a
+---|CompleteDone| expander, for which `word` is only ever what the menu
+---displayed, and a |CompleteChanged| stylist for the preview.
 
 local completion = require('zsnip.completion')
 
@@ -104,11 +105,13 @@ function M.completefunc(findstart, base)
     -- plain body, for a user who wants every description visible without
     -- selecting.
     local menu, info
-    if classic then
-      menu = match.snippet.description or ''
-      info = match.text
-    else
-      info = completion.document(match.snippet, match.text, vim.bo.filetype)
+    if documented then
+      if classic then
+        menu = match.snippet.description or ''
+        info = match.text
+      else
+        info = completion.document(match.snippet, match.text, vim.bo.filetype)
+      end
     end
     items[#items + 1] = {
       -- `word` covers everything Vim replaces, so it carries `kept` back;
@@ -116,8 +119,8 @@ function M.completefunc(findstart, base)
       word = kept .. prefix,
       abbr = prefix,
       kind = 'Snippet',
-      menu = documented and menu or nil,
-      info = documented and info or '',
+      menu = menu,
+      info = info,
       -- The body travels with the item: by the time it is accepted the menu
       -- that produced it is gone, and CompleteDone gets only this.
       user_data = { zsnip = { body = match.text, keep = #kept } },
@@ -154,34 +157,60 @@ local function expand()
   expand_body(data.body)
 end
 
+---The preview buffer stylize() marked up, until selection leaves zsnip's items.
+---@type integer?
+local styled
+
 ---Vim draws an F-source's `info` as plain text, and core's markdown styling
 ---is gated on `user_data.nvim.lsp` -- its own items. So zsnip does for its
 ---items exactly what |vim.lsp.completion| does for core's: treesitter
 ---markdown over the preview float, fences concealed, height fitted to what
 ---conceal left visible.
+---
+---And one thing core does not: the float and its buffer are reused by every
+---item in one menu, so on the way out -- selection moving off a snippet --
+---the styling is taken back off, or a plain buffer word shown after a
+---snippet would inherit conceal and markdown highlights. Core's own items
+---are left to core, which restyles them on its own schedule (some of it
+---debounced) and must not be raced.
 local function stylize()
   local completed = vim.v.event.completed_item or {}
-  if vim.tbl_get(completed, 'user_data', 'zsnip') == nil or options.description_style == 'classic' then
+  local mine = options.description_style ~= 'classic'
+    and vim.tbl_get(completed, 'user_data', 'zsnip') ~= nil
+  if not mine and styled == nil then
     return
   end
 
   -- 'selected' is load-bearing: complete_info() leaves the preview fields
-  -- unset unless it is asked for alongside them (checked on 0.12 nightly).
+  -- unset unless it is asked for alongside them.
   local preview = vim.fn.complete_info({ 'selected', 'preview_winid', 'preview_bufnr' })
   local winid, bufnr = preview.preview_winid, preview.preview_bufnr
   if not (winid and bufnr and vim.api.nvim_win_is_valid(winid) and vim.api.nvim_buf_is_valid(bufnr)) then
     return
   end
 
-  vim.api.nvim_set_option_value('conceallevel', 2, { win = winid })
-  pcall(vim.treesitter.start, bufnr, 'markdown')
-  vim.api.nvim_win_resize(winid, -1, vim.api.nvim_win_text_height(winid, {}).all)
+  if mine then
+    vim.api.nvim_set_option_value('conceallevel', 2, { win = winid })
+    pcall(vim.treesitter.start, bufnr, 'markdown')
+    styled = bufnr
+  elseif styled ~= bufnr then
+    -- A fresh session brought a fresh preview; the styled one died with the last.
+    styled = nil
+    return
+  elseif vim.tbl_get(completed, 'user_data', 'nvim', 'lsp') ~= nil then
+    return
+  else
+    vim.api.nvim_set_option_value('conceallevel', 0, { win = winid })
+    pcall(vim.treesitter.stop, bufnr)
+    styled = nil
+  end
+  vim.api.nvim_win_resize(winid, -1, vim.api.nvim_win_text_height(winid).all)
 end
 
 ---What to put in 'complete' to serve snippets, for a caller that sets the
 ---option itself instead of letting `enable()` append. Append `^{count}` to cap
 ---the source; see |'complete'|. Pair it with `enable({ complete = false })`,
----which installs the |CompleteDone| handler without touching the option.
+---which installs the handlers without touching the option.
 ---@return string
 function M.source()
   return SOURCE
