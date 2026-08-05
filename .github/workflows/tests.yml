@@ -11,10 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       # Each version reports on its own: a failure on one must not cancel the
-      # others and hide whether they would have passed.
+      # others and hide whether they would have passed. The 0.13.0 floor has
+      # not released, so nightly runs alone until stable can rejoin.
       fail-fast: false
       matrix:
-        neovim-version: ['v0.12.0', 'nightly']
+        neovim-version: ['nightly']
 
     steps:
       - name: Checkout code

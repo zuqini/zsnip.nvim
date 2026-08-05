@@ -21,10 +21,10 @@ local function check_environment()
 
   vim.health.info('zsnip ' .. require('zsnip').version)
 
-  if vim.fn.has('nvim-0.12') == 1 then
-    vim.health.ok('Neovim ' .. tostring(vim.version()) .. ' (>= 0.12.0 required)')
+  if vim.fn.has('nvim-0.13') == 1 then
+    vim.health.ok('Neovim ' .. tostring(vim.version()) .. ' (>= 0.13.0 required)')
   else
-    vim.health.error('Neovim 0.12.0+ is required')
+    vim.health.error('Neovim 0.13.0+ is required (nightly, until 0.13 releases)')
   end
 
   if type(vim.snippet) == 'table' and type(vim.snippet.expand) == 'function' then

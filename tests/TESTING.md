@@ -111,7 +111,8 @@ Assertions come from busted's bundled [luassert](https://github.com/lunarmodules
 
 ## Notes
 
-- CI runs the suite on Neovim 0.12.0 and nightly on every push to `main` and
-  every pull request; see `.github/workflows/tests.yml`. CI's LuaRocks is
+- CI runs the suite on Neovim nightly (the 0.13.0 floor has not released) on
+  every push to `main` and every pull request; see
+  `.github/workflows/tests.yml`. CI's LuaRocks is
   already bound to LuaJIT, so it installs busted with just
   `luarocks install --tree .luarocks busted 2.3.0`.

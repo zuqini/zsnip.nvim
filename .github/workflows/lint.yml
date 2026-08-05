@@ -39,9 +39,10 @@ jobs:
         uses: rhysd/action-setup-vim@v1
         with:
           neovim: true
-          # The floor zsnip supports: type-checking against a newer runtime
-          # would pass a 0.13-only API that breaks on the version we claim.
-          version: v0.12.0
+          # The floor zsnip supports is 0.13.0, which has not released:
+          # nightly is the closest runtime to type-check against. Pin the
+          # stable release once it exists, so a newer-only API cannot pass.
+          version: nightly
 
       - name: Install lua-language-server
         run: |

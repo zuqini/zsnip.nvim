@@ -57,7 +57,8 @@ zsnip loads snippet collections and hands their bodies to Neovim's
 - `lua/` is kept type-clean (`lua-language-server --check`) and lint-clean
   (`luacheck`); both run in CI on every PR.
 - Target PUC Lua 5.1 / LuaJIT — no `goto`, no 5.2+ stdlib.
-- Neovim 0.12.0 is the floor. Anything newer must be feature-detected.
+- Neovim 0.13.0 is the floor (nightly, until 0.13 releases). Anything newer
+  must be feature-detected.
 - Nothing may read the filesystem at startup: discovery is per filetype, on
   first use.
 - Update `README.md`, `docs/` and `doc/zsnip.txt` alongside code changes.
