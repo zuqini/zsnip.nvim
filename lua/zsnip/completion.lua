@@ -5,7 +5,8 @@
 ---about any protocol. `items()` projects those onto `lsp.CompletionItem[]`,
 ---which is what |zsnip.completion_items()| and the three LSP-shaped sources
 ---(`zsnip.lsp`, `zsnip.blink`, `zsnip.cmp`) want. `zsnip.complete` builds its
----own shape from `matches()` instead: it is not handing an item to anyone.
+---own shape from `matches()` and `document()` instead: it is not handing an
+---item to anyone, but its preview must read like everyone else's.
 ---
 ---The bodies are already LSP snippet syntax, so `insertTextFormat` is all a
 ---client needs to expand them -- there is nothing to translate.
@@ -208,7 +209,17 @@ end
 ---@param filetype string
 ---@return string
 function M.document(snippet, text, filetype)
-  local fenced = ('```%s\n%s\n```'):format(filetype, text)
+  -- A body can carry fences of its own (markdown snippet packs do), and a
+  -- ``` inside would close ours early: the fence has to outgrow the longest
+  -- backtick run in the body.
+  local ticks = 3
+  for run in text:gmatch('`+') do
+    if #run >= ticks then
+      ticks = #run + 1
+    end
+  end
+  local fence = ('`'):rep(ticks)
+  local fenced = ('%s%s\n%s\n%s'):format(fence, filetype, text, fence)
   local description = snippet.description
   if description and description ~= '' then
     return description .. '\n\n' .. fenced

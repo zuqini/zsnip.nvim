@@ -139,6 +139,13 @@ describe('completion.items', function()
     assert.are.same({ 'mine', 'also' }, labels(items))
   end)
 
+  it('outgrows a fence the body already contains', function()
+    registry.add('markdown', { { prefix = 'code', body = '```js\nx\n```' } })
+
+    local item = completion.items({ filetype = 'markdown' })[1]
+    assert.are.equal('````markdown\n```js\nx\n```\n````', item.documentation.value)
+  end)
+
   it('can leave out the documentation', function()
     registry.add('lua', { { prefix = 'a', body = 'b', description = 'desc' } })
 
