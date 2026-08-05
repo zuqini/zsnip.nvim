@@ -260,25 +260,29 @@ the name `zsnip`; `opts` are the same three. nvim-cmp is required by
 ### `zsnip.complete`
 
 A source for Neovim's own insert-mode completion, through `'complete'`.
-Requires Neovim 0.12. Needs no completion plugin and no LSP client. `opts` are
-the same `limit`, `documentation` and `filter` as the other three — except that
-`limit` defaults to `max_items` here rather than to uncapped, since nothing
-downstream trims what this source returns.
+Needs no completion plugin and no LSP client. `opts` are the same `limit`,
+`documentation` and `filter` as the other three — except that `limit` defaults
+to `max_items` here rather than to uncapped, since nothing downstream trims
+what this source returns — plus three of its own: `complete = false` when you
+set `'complete'` yourself, `expand` to replace `vim.snippet.expand()` as what
+turns the accepted body into a session, and `description_style = 'classic'`
+to keep the description in the menu row with a plain-body preview instead of
+the default LSP-style rendering.
 
 | Function | Does |
 | --- | --- |
-| `require('zsnip.complete').enable(opts?)` | Append zsnip to `'complete'` and install the `CompleteDone` handler that expands what is accepted. Idempotent; `opts` are the same three, plus `complete = false` |
-| `require('zsnip.complete').disable()` | Remove both again |
+| `require('zsnip.complete').enable(opts?)` | Append zsnip to `'complete'` and install the handlers — a `CompleteDone` expander and a `CompleteChanged` preview stylist. Idempotent; `opts` as above |
+| `require('zsnip.complete').disable()` | Remove the entry and the handlers again |
 | `require('zsnip.complete').source()` | The entry to put in `'complete'` yourself; append `^{count}` to cap it |
 | `require('zsnip.complete').enabled()` | Whether zsnip is in `'complete'` for the current buffer, with or without a `^{count}` cap |
-| `require('zsnip.complete').completefunc(findstart, base)` | The raw [`complete-functions`](https://neovim.io/doc/user/insert.html#complete-functions) implementation. Pair it with `enable({ complete = false })`, which installs the `CompleteDone` handler without touching the option — without that, accepting an item inserts a literal `${1:mod}` |
+| `require('zsnip.complete').completefunc(findstart, base)` | The raw [`complete-functions`](https://neovim.io/doc/user/insert.html#complete-functions) implementation. Pair it with `enable({ complete = false })`, which installs the handlers without touching the option — without that, accepting an item inserts a literal `${1:mod}` |
 
 `enable()` does not set `'autocomplete'` — CTRL-N reaches the source either
 way, and whether the menu opens by itself is your decision.
 
 If you set `'complete'` yourself — a config that owns the option, or one that
 caps the source — pair it with `enable({ complete = false })`, which installs
-the `CompleteDone` handler and leaves the option alone. `enabled()` and
+the handlers and leaves the option alone. `enabled()` and
 `disable()` recognise the entry with or without a `^{count}` cap, so a capped
 setup is neither appended to twice nor missed by `:checkhealth`.
 

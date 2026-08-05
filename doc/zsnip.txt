@@ -56,7 +56,7 @@ What zsnip adds on top of the engine:
 ==============================================================================
 2. REQUIREMENTS                                            *zsnip-requirements*
 
-- Neovim 0.12.0 or newer
+- Neovim 0.13.0 or newer (nightly, until 0.13 releases)
 - A snippet collection, e.g. rafamadriz/friendly-snippets
 
 ==============================================================================
@@ -276,10 +276,10 @@ Neovim's built-in completion~
     vim.o.completeopt = 'menu,popup,noinsert'
 <
 A function source in 'complete', so snippets rank next to buffer words in one
-menu and 'autocomplete' drives them as you type. Needs Neovim 0.12, where
-'complete' gained a function source. No completion plugin and no LSP client:
-enable() appends one entry to 'complete' and installs two handlers -- a
-|CompleteDone| expander and a |CompleteChanged| stylist for the preview.
+menu and 'autocomplete' drives them as you type. No completion plugin and no
+LSP client: enable() appends one entry to 'complete' and installs two
+handlers -- a |CompleteDone| expander and a |CompleteChanged| stylist for the
+preview.
 
 Each source can be capped on its own. Setting 'complete' yourself means enable()
 should not append to it as well, so take the entry from source() and pass
@@ -297,7 +297,10 @@ The preview shows exactly what |vim.lsp.completion| would render for the same
 snippet: the description as prose, then the body syntax-highlighted -- the
 same markdown the LSP-shaped sources put in `documentation`, styled the same
 way (treesitter over the preview float, fences concealed) by the
-|CompleteChanged| handler. The menu row stays the trigger and its kind alone.
+|CompleteChanged| handler. The styling reaches the float that `popup` in
+'completeopt' opens -- the `preview` split shows the markdown raw -- and
+comes back off when selection moves to another source's plain item, since one
+menu reuses the same float. The menu row stays the trigger and its kind alone.
 `description_style = 'classic'` keeps the description in the menu row instead,
 visible without selecting, with the preview holding a plain body.
 `documentation = false` empties both wherever they went, and disable() undoes

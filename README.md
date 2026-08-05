@@ -85,7 +85,7 @@ What that leaves zsnip to do, it does completely:
 
 ## Requirements
 
-- Neovim 0.12.0+
+- Neovim 0.13.0+ (nightly, until 0.13 releases)
 - A snippet collection, e.g. [friendly-snippets](https://github.com/rafamadriz/friendly-snippets)
 
 ## Installation
@@ -159,7 +159,7 @@ require('cmp').setup({
 ```
 
 **Neovim's own completion, no plugin and no LSP client** — a `'complete'`
-function source (needs Neovim 0.12):
+function source:
 
 ```lua
 require('zsnip.complete').enable()
@@ -171,7 +171,7 @@ vim.o.completeopt = 'menu,popup,noinsert'
 Snippets then rank alongside buffer words in one menu, and `'complete'` can cap
 each source separately. If you set the option yourself, take the entry from
 `require('zsnip.complete').source()` and pass `complete = false` so `enable()`
-installs the `CompleteDone` handler without appending a second copy:
+installs the handlers without appending a second copy:
 
 ```lua
 vim.o.complete = ".^5,w," .. require('zsnip.complete').source() .. '^10'

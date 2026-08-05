@@ -12,7 +12,7 @@ snippet twice.
 | `zsnip.start_lsp_server()` | Anything else | One call covers every LSP-speaking menu, but the items arrive folded in with your language servers' |
 
 The last two need no completion plugin, and `zsnip.complete` needs no LSP
-client either. Both require Neovim 0.12.
+client either.
 
 ## blink.cmp
 
@@ -66,15 +66,15 @@ vim.o.autocomplete = true            -- optional; CTRL-N reaches it either way
 vim.o.completeopt = 'menu,popup,noinsert'
 ```
 
-Needs Neovim 0.12, where `'complete'` gained a function source and
-`'autocomplete'` gained the ability to drive it as you type. No completion
-plugin, and unlike the LSP server, no LSP client either — `enable()` appends
-one entry to `'complete'` and installs a `CompleteDone` handler.
+A function source in `'complete'`, which `'autocomplete'` drives as you type.
+No completion plugin, and unlike the LSP server, no LSP client either —
+`enable()` appends one entry to `'complete'` and installs two handlers: a
+`CompleteDone` expander and a `CompleteChanged` stylist for the preview.
 
 Snippets then rank next to buffer words in a single menu, and each source can
 be capped on its own. Setting `'complete'` yourself means `enable()` should not
 also append to it, so pass `complete = false` and it installs only the
-`CompleteDone` handler:
+handlers:
 
 ```lua
 vim.o.complete = ".^5,w," .. require('zsnip.complete').source() .. '^10'
@@ -90,9 +90,12 @@ opens by itself is your decision, not zsnip's.
 
 The preview shows exactly what `vim.lsp.completion` would render for the same
 snippet — the description as prose, then the body syntax-highlighted — so the
-menu row stays the trigger and its kind alone. Pass `description_style =
-'classic'` to keep the description in the menu row instead, visible without
-selecting, with a plain body in the preview.
+menu row stays the trigger and its kind alone. The styling reaches the float
+that `popup` in `'completeopt'` opens (the `preview` split shows the markdown
+raw), and comes back off when selection moves to another source's plain item,
+since one menu reuses the same float. Pass `description_style = 'classic'` to
+keep the description in the menu row instead, visible without selecting, with
+a plain body in the preview.
 
 Two things are specific to this path:
 
