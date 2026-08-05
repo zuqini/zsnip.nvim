@@ -175,7 +175,7 @@ local function stylize()
 
   vim.api.nvim_set_option_value('conceallevel', 2, { win = winid })
   pcall(vim.treesitter.start, bufnr, 'markdown')
-  vim.api.nvim_win_resize(winid, -1, vim.api.nvim_win_text_height(winid).all)
+  vim.api.nvim_win_resize(winid, -1, vim.api.nvim_win_text_height(winid, {}).all)
 end
 
 ---What to put in 'complete' to serve snippets, for a caller that sets the
