@@ -66,6 +66,83 @@ describe('registry discovery', function()
     assert.are.same({ 'todo' }, helpers.prefixes(registry.get('haskell')))
   end)
 
+  -- `scope` only has meaning in a global/project `.code-snippets` file --
+  -- VSCode itself does not read it from a manifest-declared file, which is
+  -- why packs put harmless TextMate scopes (`text.html`, `source.python`)
+  -- in them. A manifest's `language` decides who is served, not `scope`.
+  it('serves a manifest-declared file whose entries carry a TextMate scope, not a filetype', function()
+    local dir = helpers.vscode_pack({
+      html = { div = { scope = 'text.html', prefix = 'div', body = '<div>$0</div>' } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({ 'div' }, helpers.prefixes(registry.get('html')))
+  end)
+
+  -- Same contract for a loose `<language>.json`: the filename decides, not
+  -- an unrelated scope on its entries.
+  it('serves <language>.json whose entries carry a TextMate scope, not a filetype', function()
+    local dir = helpers.standalone_dir({
+      ['html.json'] = { div = { scope = 'text.html', prefix = 'div', body = '<div>$0</div>' } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({ 'div' }, helpers.prefixes(registry.get('html')))
+  end)
+
+  -- Only `.code-snippets` gets to filter by `scope`: a language a manifest or
+  -- filename never declared must still not see it.
+  it('still drops a .code-snippets entry scoped to a language other than the one asked about', function()
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = { pyd = { scope = 'python', prefix = 'def', body = 'def $1():' } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({}, helpers.prefixes(registry.get('lua')))
+    assert.are.same({ 'def' }, helpers.prefixes(registry.get('python')))
+  end)
+
+  -- friendly-snippets' own shape: one manifest file declared for several
+  -- languages at once, entries carrying a TextMate scope that names none of
+  -- them. Every declared language must still see it.
+  it('serves a shared manifest file to every declared language regardless of scope', function()
+    local dir = helpers.vscode_shared_pack(
+      { 'markdown', 'gitcommit' },
+      { note = { scope = 'text.html', prefix = 'note', body = 'b' } }
+    )
+    helpers.use_rtp(dir)
+    require('zsnip.loaders.from_vscode').lazy_load()
+
+    assert.are.same({ 'note' }, helpers.prefixes(registry.get('markdown')))
+    assert.are.same({ 'note' }, helpers.prefixes(registry.get('gitcommit')))
+  end)
+
+  -- The global bucket path: a manifest naming the language `all` files under
+  -- global_filetype regardless of scope too -- the same manifest/filename
+  -- rule applies once the alias resolves the bucket.
+  it('serves a manifest entry filed to the global bucket regardless of scope', function()
+    require('zsnip.config').setup({ global_filetype = 'global' })
+    local dir = helpers.vscode_pack({
+      all = { note = { scope = 'text.html', prefix = 'note', body = 'b' } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({ 'note' }, helpers.prefixes(registry.get('global')))
+  end)
+
+  -- A `.code-snippets` entry whose `scope` literally names the user's custom
+  -- global bucket is asked for by that name, not by `all` -- the pack
+  -- spelling the registry records is the one the entry actually carries.
+  it('serves a .code-snippets entry scoped to a custom global bucket by its own name', function()
+    require('zsnip.config').setup({ global_filetype = 'global' })
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = { note = { scope = 'global', prefix = 'note', body = 'b' } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({ 'note' }, helpers.prefixes(registry.get('global')))
+  end)
+
   -- A manifest is still the authority for the files it names; globbing beside
   -- it must not offer the same file a second time under a name from disk.
   it('does not double up a file a package.json already claimed', function()
@@ -90,6 +167,34 @@ describe('registry discovery', function()
     require('zsnip.loaders.from_snipmate').lazy_load()
 
     assert.are.same({ 'cls' }, helpers.prefixes(registry.get('pkl')))
+  end)
+
+  -- snipmate's convention for "every filetype" is `_.snippets` --
+  -- honza/vim-snippets ships one -- which is what `global_filetype` already
+  -- means here.
+  it('files _.snippets under global_filetype', function()
+    helpers.use_rtp(helpers.snipmate_pack({ _ = 'snippet todo\n\tTODO: $1' }))
+    require('zsnip.loaders.from_snipmate').lazy_load()
+
+    assert.are.same({ 'todo' }, helpers.prefixes(registry.get('lua')))
+  end)
+
+  it('files _.snippets under a renamed global_filetype', function()
+    require('zsnip.config').setup({ global_filetype = 'global' })
+    helpers.use_rtp(helpers.snipmate_pack({ _ = 'snippet todo\n\tTODO: $1' }))
+    require('zsnip.loaders.from_snipmate').lazy_load()
+
+    local snippets = registry.get('lua')
+    assert.are.equal(1, #snippets)
+    assert.are.equal('global', snippets[1].filetype)
+  end)
+
+  it('drops _.snippets entirely when global_filetype is disabled', function()
+    helpers.use_rtp(helpers.snipmate_pack({ _ = 'snippet todo\n\tTODO: $1' }))
+    require('zsnip.config').setup({ global_filetype = false })
+    require('zsnip.loaders.from_snipmate').lazy_load()
+
+    assert.are.same({}, helpers.prefixes(registry.get('lua')))
   end)
 
   it('takes the filetype from the directory for snippets/<ft>/<name>.snippets', function()
@@ -172,6 +277,21 @@ describe('registry resolution', function()
     require('zsnip.loaders.from_vscode').lazy_load()
 
     assert.are.same({}, registry.get('lua'))
+  end)
+
+  -- Neovim assigns these itself for some filetypes (javascript.glimmer), and
+  -- users set others (yaml.ansible). LuaSnip splits on '.', and zsnip sells
+  -- LuaSnip parity.
+  it('gives a dotted filetype its own bucket, then each component, then global', function()
+    registry.add('yaml.ansible', { { prefix = 'own', body = 'b' } })
+    registry.add('yaml', { { prefix = 'yaml_snip', body = 'b' } })
+    registry.add('ansible', { { prefix = 'ansible_snip', body = 'b' } })
+    registry.add('all', { { prefix = 'global', body = 'b' } })
+
+    assert.are.same(
+      { 'own', 'yaml_snip', 'ansible_snip', 'global' },
+      helpers.prefixes(registry.get('yaml.ansible'))
+    )
   end)
 
   it('inherits from filetypes declared through the API', function()
@@ -451,6 +571,41 @@ describe('registry discovery of awkward paths', function()
     assert.are.same({ 'loose' }, helpers.prefixes(registry.get('lua')))
     assert.are.same({ 'nested' }, helpers.prefixes(registry.get('python')))
   end)
+
+  -- A stow/dotfiles setup routes every file it manages through a symlink, so
+  -- ~/.config/nvim/snippets/lua.json is really a link into the dotfiles repo.
+  it('follows a symlinked VSCode snippet file under paths', function()
+    local real = helpers.tempdir()
+    helpers.write(real .. '/lua.json', vim.json.encode({ req = { prefix = 'req', body = 'b' } }))
+
+    local paths_dir = helpers.tempdir()
+    assert(vim.uv.fs_symlink(real .. '/lua.json', paths_dir .. '/lua.json'))
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = paths_dir })
+
+    assert.are.same({ 'req' }, helpers.prefixes(registry.get('lua')))
+  end)
+
+  it('follows a symlinked snipmate snippet file under paths', function()
+    local real = helpers.tempdir()
+    helpers.write(real .. '/lua.snippets', 'snippet cls\n\tclass $1 {}')
+
+    local paths_dir = helpers.tempdir()
+    assert(vim.uv.fs_symlink(real .. '/lua.snippets', paths_dir .. '/lua.snippets'))
+    require('zsnip.loaders.from_snipmate').lazy_load({ paths = paths_dir })
+
+    assert.are.same({ 'cls' }, helpers.prefixes(registry.get('lua')))
+  end)
+
+  it('descends into a symlinked directory of snipmate snippet files', function()
+    local real_dir = helpers.tempdir()
+    helpers.write(real_dir .. '/misc.snippets', 'snippet cls\n\tclass $1 {}')
+
+    local paths_dir = helpers.tempdir()
+    assert(vim.uv.fs_symlink(real_dir, paths_dir .. '/python'))
+    require('zsnip.loaders.from_snipmate').lazy_load({ paths = paths_dir })
+
+    assert.are.same({ 'cls' }, helpers.prefixes(registry.get('python')))
+  end)
 end)
 
 describe('registry.dropped', function()
@@ -482,6 +637,55 @@ describe('registry.dropped', function()
     registry.invalidate()
     assert.are.equal(1, registry.dropped())
   end)
+
+  -- One `.code-snippets` file scoped to several languages is one bad body,
+  -- not one per language it happens to serve.
+  it('counts a shared file dropping one body once, not once per language', function()
+    local dir = helpers.tempdir()
+    helpers.write(
+      dir .. '/mine.code-snippets',
+      vim.json.encode({ bad = { scope = 'javascript,typescript', prefix = 'x', body = '${' } })
+    )
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    registry.get('javascript')
+    registry.get('typescript')
+
+    assert.are.equal(1, registry.dropped())
+  end)
+
+  -- A per-entry `scope` means different languages see different entry sets,
+  -- so a bad body scoped to only one of them must be counted once regardless
+  -- of which language happens to be opened -- and therefore parsed -- first.
+  it('counts a body scoped to one language of a mixed file the same, lua opened first', function()
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = {
+        good = { scope = 'lua', prefix = 'good', body = 'fine' },
+        bad = { scope = 'python', prefix = 'bad', body = '${1:a} ${1:b}' },
+      },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    registry.get('lua')
+    registry.get('python')
+
+    assert.are.equal(1, registry.dropped())
+  end)
+
+  it('counts a body scoped to one language of a mixed file the same, python opened first', function()
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = {
+        good = { scope = 'lua', prefix = 'good', body = 'fine' },
+        bad = { scope = 'python', prefix = 'bad', body = '${1:a} ${1:b}' },
+      },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    registry.get('python')
+    registry.get('lua')
+
+    assert.are.equal(1, registry.dropped())
+  end)
 end)
 
 describe('registry.loader', function()
@@ -493,5 +697,181 @@ describe('registry.loader', function()
 
     assert.are.same({ '/tmp/one' }, opts.paths)
     assert.are.same({ 'lua' }, opts.exclude)
+  end)
+
+  -- A re-run config -- lazy_load { paths = dir } called twice -- must not
+  -- leave { dir, dir }: :checkhealth would list the same path twice.
+  it('does not duplicate a path registered more than once', function()
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = '/tmp/one' })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = '/tmp/one' })
+
+    assert.are.same({ '/tmp/one' }, registry.loader('vscode').paths)
+  end)
+
+  -- `~/x` and its expansion are the same directory, not the same string;
+  -- :checkhealth would otherwise list both.
+  it('does not duplicate a path against its normalized form', function()
+    local expanded = vim.fs.normalize('~/zsnip-test-path')
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = '~/zsnip-test-path' })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = expanded })
+
+    assert.are.same({ expanded }, registry.loader('vscode').paths)
+  end)
+end)
+
+describe('registry definition dedupe', function()
+  -- friendly-snippets' real shape: a manifest lists one file under several
+  -- languages, including the global one, so the file is reachable through
+  -- both its own bucket and the global bucket for the same lookup.
+  it('serves a manifest file listed under its own language and the global one only once', function()
+    local dir = helpers.vscode_shared_pack({ 'markdown', 'all' }, { note = { prefix = 'note', body = 'b' } })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    local snippets = registry.get('markdown')
+    assert.are.equal(1, #snippets)
+    assert.are.equal('markdown', snippets[1].filetype)
+  end)
+
+  -- Reached only through the global bucket -- never doubled to begin with --
+  -- but pinned so the dedupe above cannot start dropping the entry instead.
+  it('still reaches that file through the global bucket alone', function()
+    local dir = helpers.vscode_shared_pack({ 'markdown', 'all' }, { note = { prefix = 'note', body = 'b' } })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    local snippets = registry.get('python')
+    assert.are.equal(1, #snippets)
+    assert.are.equal('all', snippets[1].filetype)
+  end)
+
+  it('serves a scope naming two languages, one of them global, only once', function()
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = { x = { scope = 'lua, all', prefix = 'x', body = 'b' } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    local snippets = registry.get('lua')
+    assert.are.equal(1, #snippets)
+    assert.are.equal('lua', snippets[1].filetype)
+  end)
+
+  -- parse() keeps an unscoped entry for every language it is asked about, so
+  -- a mixed file filed under both its own bucket and the global one served
+  -- the unscoped entry twice.
+  it('serves the unscoped entry of a mixed file only once', function()
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = {
+        scoped = { scope = 'lua', prefix = 'onlylua', body = 'b' },
+        free = { prefix = 'everyone', body = 'b' },
+      },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    local prefixes = helpers.prefixes(registry.get('lua'))
+    assert.are.equal(2, #prefixes)
+    assert.contains(prefixes, 'onlylua')
+    assert.contains(prefixes, 'everyone')
+  end)
+end)
+
+describe('registry.components', function()
+  it('is the exact filetype, then each dot-separated component', function()
+    assert.are.same({ 'yaml.ansible', 'yaml', 'ansible' }, registry.components('yaml.ansible'))
+  end)
+
+  it('is just the filetype when it has no dot', function()
+    assert.are.same({ 'lua' }, registry.components('lua'))
+  end)
+
+  it('does not choke on an empty filetype', function()
+    assert.are.same({ '' }, registry.components(''))
+  end)
+end)
+
+describe('registry global alias for vscode "all"', function()
+  it('files a scope literally named all under global_filetype', function()
+    require('zsnip.config').setup({ global_filetype = 'global' })
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = { x = { scope = 'all', prefix = 'x', body = 'b' } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    local snippets = registry.get('lua')
+    assert.are.equal(1, #snippets)
+    assert.are.equal('global', snippets[1].filetype)
+  end)
+
+  it('files a manifest language literally named all under global_filetype', function()
+    require('zsnip.config').setup({ global_filetype = 'global' })
+    local dir = helpers.tempdir()
+    helpers.write(dir .. '/snippets/x.json', vim.json.encode({ note = { prefix = 'note', body = 'b' } }))
+    helpers.write(
+      dir .. '/package.json',
+      vim.json.encode({ contributes = { snippets = { { language = 'all', path = './snippets/x.json' } } } })
+    )
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    local snippets = registry.get('lua')
+    assert.are.equal(1, #snippets)
+    assert.are.equal('global', snippets[1].filetype)
+  end)
+
+  it('drops a scope literally named all when global_filetype is disabled', function()
+    require('zsnip.config').setup({ global_filetype = false })
+    local dir = helpers.standalone_dir({
+      ['mine.code-snippets'] = { x = { scope = 'all', prefix = 'x', body = 'b' } },
+    })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = dir })
+
+    assert.are.same({}, registry.get('lua'))
+  end)
+
+  -- A mixed file the parser cannot see the bucket for: one entry scoped to a
+  -- real language, one unscoped, one scoped to the literal `all`. The parser
+  -- stays a pure scope matcher, so filing the `all` entry under whichever
+  -- bucket global_filetype names -- or dropping it -- is entirely
+  -- registry.lua's job.
+  local function mixed_pack()
+    return helpers.standalone_dir({
+      ['mine.code-snippets'] = {
+        scoped = { scope = 'lua', prefix = 'onlylua', body = 'b' },
+        free = { prefix = 'everyone', body = 'b' },
+        everywhere = { scope = 'all', prefix = 'viaall', body = 'b' },
+      },
+    })
+  end
+
+  it('drops the all entry of a mixed file when global_filetype is disabled, keeping the rest', function()
+    require('zsnip.config').setup({ global_filetype = false })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = mixed_pack() })
+
+    local prefixes = helpers.prefixes(registry.get('lua'))
+    assert.are.equal(2, #prefixes)
+    assert.contains(prefixes, 'onlylua')
+    assert.contains(prefixes, 'everyone')
+  end)
+
+  it('drops the all entry of a mixed file when the global bucket is excluded, keeping the rest', function()
+    require('zsnip.config').setup({ global_filetype = 'global' })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = mixed_pack(), exclude = { 'global' } })
+
+    local prefixes = helpers.prefixes(registry.get('lua'))
+    assert.are.equal(2, #prefixes)
+    assert.contains(prefixes, 'onlylua')
+    assert.contains(prefixes, 'everyone')
+  end)
+
+  it('serves the all entry of a mixed file to an unrelated language, stamped with the global bucket', function()
+    require('zsnip.config').setup({ global_filetype = 'global' })
+    require('zsnip.loaders.from_vscode').lazy_load({ paths = mixed_pack() })
+
+    local viaall = helpers.find(registry.get('python'), 'viaall')
+    assert.is_not_nil(viaall)
+    assert.are.equal('global', viaall.filetype)
+  end)
+end)
+
+describe('registry.kinds', function()
+  it('names the loader kinds in the order they are scanned', function()
+    assert.are.same({ 'vscode', 'snipmate' }, registry.kinds())
   end)
 end)

@@ -11,7 +11,7 @@
 ---```
 ---
 ---Deliberately requires nothing from blink: the items are plain LSP completion
----items, so the only thing shared with it is the shape of these four methods.
+---items, so the only thing shared with it is the shape of these three methods.
 ---An alternative to |zsnip.start_lsp_server()|, not a companion -- run both and
 ---every snippet is offered twice.
 

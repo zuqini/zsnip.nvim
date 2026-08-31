@@ -10,15 +10,17 @@ requires `setup()` to have run — it only stores options and creates `:ZSnip`.
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `extend` | `table<string, string\|string[]>` | `{}` | Filetype inheritance |
-| `global_filetype` | `string\|false` | `'all'` | Bucket every filetype inherits from |
-| `max_items` | `integer` | `100` | Default cap for `completion_items()` and for `zsnip.complete`. The `blink`, `cmp` and `lsp` sources ask for an uncapped list, since the engine behind them filters and ranks it; `zsnip.complete` matches for itself and hands the result straight to the menu, so it is bounded by this |
+| `global_filetype` | `string\|false` | `'all'` | Bucket every filetype inherits from. This is a bucket name, not a filetype — naming it after a real one (`'lua'`) is unsupported |
+| `max_items` | non-negative integer, or `math.huge` for no cap | `100` | Default cap for `completion_items()` and for `zsnip.complete`. The `blink`, `cmp` and `lsp` sources ask for an uncapped list, since the engine behind them filters and ranks it; `zsnip.complete` matches for itself and hands the result straight to the menu, so it is bounded by this |
 | `documentation` | `boolean` | `true` | Attach the body and description to each item |
 | `command` | `boolean` | `true` | Create the [`:ZSnip`](#the-zsnip-command) command |
 
 An unknown key, or a known one of the wrong type, is reported with
-`vim.notify` and otherwise ignored — the rest of the config still applies.
-`command = false` removes an existing `:ZSnip` as well as declining to create
-one, so a later `setup()` can undo an earlier one.
+`vim.notify` and dropped — the rest of the config still applies, and the
+default is used in its place. So is a known key whose value it cannot use
+(`global_filetype = true`, a fractional or negative `max_items`). `command =
+false` removes an existing `:ZSnip` as well as declining to create one, so a
+later `setup()` can undo an earlier one.
 
 ### `zsnip.loaders.from_vscode.lazy_load(opts?)` / `.load(opts?)`
 ### `zsnip.loaders.from_snipmate.lazy_load(opts?)` / `.load(opts?)`
@@ -34,7 +36,14 @@ over the runtimepath.
 | `exclude` | `string[]` | Load every language except these |
 
 A snipmate `path` is a directory containing `*.snippets` files, or per-filetype
-directories of them.
+directories of them. `_.snippets` — snipmate's convention for "every
+filetype", which honza/vim-snippets ships one of — is filed under
+`global_filetype` instead of a filetype literally named `_`, and dropped
+entirely when `global_filetype` is `false`. `${VISUAL}`/`$VISUAL`, snipmate's
+own name for the selected text, is rewritten to `TM_SELECTED_TEXT` on the way
+in. A VSCode pack's spelling of "every filetype" is the language `all` — in a
+manifest's `language` list or a `.code-snippets` entry's `scope` — and it is
+filed under `global_filetype`, or dropped, the same way.
 
 A VSCode `path` is a directory containing a `package.json`, **or** one holding
 loose snippet files the way VSCode keeps a user's own — so
@@ -45,6 +54,14 @@ loose snippet files the way VSCode keeps a user's own — so
 | `<language>.json` | the filetype it is named after |
 | `*.code-snippets` | the languages each snippet's `scope` names, comma-separated; an unscoped entry reaches every filetype via `global_filetype` |
 | `package.json` | still decides when present; files it names are not read again from the glob |
+
+`scope` decides which languages a file serves in the `*.code-snippets` row
+alone. A `<language>.json` takes its filetype from its filename and a
+manifest-declared file takes its from the manifest; VSCode gives `scope` no
+meaning in either, so a `scope` key inside one of those is ignored rather than
+filtered on. This is deliberate, not an oversight: real packs carry TextMate
+scopes (`source.lua`, `text.html`) in exactly those files, where they are
+harmless — filtering on them drops most of what the pack serves.
 
 Loose files are only looked for under a configured `path`, never on the
 runtimepath — a plugin there declares what it contributes in a `package.json`.
@@ -83,9 +100,13 @@ them). Cycles are safe.
 
 ### `zsnip.get(filetype?)` → `zsnip.Snippet[]`
 
-Every snippet available to a filetype (its own, then inherited, then global),
-in shadowing order. Defaults to the current buffer's filetype. Each entry
-carries a `filetype` field naming where it came from.
+Every snippet available to a filetype (its own, then inherited, then each
+dot-separated component of a dotted filetype, then global), in shadowing
+order. A dotted filetype such as `javascript.glimmer` — which Neovim assigns
+itself for some filetypes, and which users set for others, e.g.
+`yaml.ansible` — gets everything registered for `javascript` and `glimmer`
+too. Defaults to the current buffer's filetype. Each entry carries a
+`filetype` field naming where it came from.
 
 ### `zsnip.available()` → `table<string, zsnip.Snippet[]>`
 
@@ -104,7 +125,7 @@ what `expand_snippet()` expects back.
 | `filetype` | `string` | Defaults to the filetype of `bufnr` |
 | `bufnr` | `integer` | Defaults to the current buffer |
 | `position` | `lsp.Position` | Cursor the response is anchored to; defaults to the real one when `bufnr` is the current buffer |
-| `limit` | `integer` | Overrides `max_items` |
+| `limit` | non-negative integer, or `math.huge` for no cap | Overrides `max_items` |
 | `documentation` | `boolean` | Overrides the configured default |
 | `filter` | `fun(snippet): boolean` | Keep only the snippets this returns true for |
 
@@ -129,8 +150,17 @@ span, because `vim.lsp.completion` filters the whole list against the lowest
 start it is given.
 
 Where the run holds text the trigger does not account for — the `(` of `(req` —
-that text is inside the replaced span, so it is put back in front of the body
-(escaped, not as snippet syntax) and `filterText` covers the whole run.
+that text is inside the replaced span, so it goes back in front of the body
+(escaped, not as snippet syntax) in `insertText`/`newText` regardless. It only
+also goes into `filterText` when some suffix of the run actually matched the
+trigger (`(req` against `req`); left out otherwise, or a client that filters
+by prefix alone would offer every snippet after a bare `(`. How much of the
+run is buffer text is decided per legal start of the run, longest first: the
+first one the trigger fuzzy-matches from — whether that start began the
+trigger outright or only fuzzy-matched it — is where the head ends. `(c.log`
+against `console.log` keeps `(` as head, since the match starts one byte in,
+at `c.log`; `c.c` against `console.clear` keeps nothing, since the match
+already starts at the run's first byte.
 
 `textEdit` needs a cursor to anchor to. There is none when `bufnr` is not the
 current buffer and no `position` was given; the items are then plain, as
@@ -139,7 +169,7 @@ before.
 `sortText` is set only when `prefix` was given, i.e. when zsnip did the
 ranking. Without it the order is whichever order the packs were read in, and
 pinning a client to that would stop it applying the ranking it does better;
-the three built-in sources rely on that and pass no `prefix`.
+the three LSP-shaped sources rely on that and pass no `prefix`.
 
 ### `zsnip.resolve(body)` → `string`
 
@@ -198,14 +228,21 @@ returns whether it moved.
 ### `zsnip.start_lsp_server(opts?)`
 
 Start an in-process language server that answers `textDocument/completion`
-with the snippets of the requesting buffer's filetype, and attach it to every
-buffer that gets a filetype. Idempotent.
+with the snippets of the requesting buffer's filetype, and attach it to the
+buffers that qualify. Idempotent: calling it again stops whatever a
+previous call started, clients included, before starting the new one.
+
+A buffer holds the client when it has a filetype, has no `'buftype'` (prompts,
+terminals, `:help`, ...), and, if `filetypes` is given, its filetype or one of
+a dotted filetype's dot-separated components is on the list. This gate re-runs
+on every `FileType`, so a buffer that stops qualifying loses the client it
+already has, not only one that never gets one.
 
 | Option | Type | Meaning |
 | --- | --- | --- |
-| `name` | `string` | Client name as it appears in `:checkhealth lsp` (default `'zsnip'`) |
-| `filetypes` | `string[]` | Attach only to these filetypes |
-| `limit` | `integer` | Cap on items per response (default: uncapped) |
+| `name` | `string` | Client name as it appears in `:checkhealth vim.lsp` (default `'zsnip'`) |
+| `filetypes` | `string[]` | Attach only to these filetypes, or a dotted one's dot-separated components (`javascript` also attaches to `javascript.glimmer`) |
+| `limit` | non-negative integer, or `math.huge` for no cap | Cap on items per response (default: uncapped) |
 | `documentation` | `boolean` | Attach the body as item documentation |
 | `filter` | `fun(snippet): boolean` | Keep only the snippets it returns true for |
 | `trigger_characters` | `string[]` | Characters that make a client ask unprompted (default: none) |
@@ -274,11 +311,14 @@ the default LSP-style rendering.
 | `require('zsnip.complete').enable(opts?)` | Append zsnip to `'complete'` and install the handlers — a `CompleteDone` expander and a `CompleteChanged` preview stylist. Idempotent; `opts` as above |
 | `require('zsnip.complete').disable()` | Remove the entry and the handlers again |
 | `require('zsnip.complete').source()` | The entry to put in `'complete'` yourself; append `^{count}` to cap it |
-| `require('zsnip.complete').enabled()` | Whether zsnip is in `'complete'` for the current buffer, with or without a `^{count}` cap |
+| `require('zsnip.complete').enabled(bufnr?)` | Whether zsnip is in `'complete'` for `bufnr` (default the current buffer), with or without a `^{count}` cap |
 | `require('zsnip.complete').completefunc(findstart, base)` | The raw [`complete-functions`](https://neovim.io/doc/user/insert.html#complete-functions) implementation. Pair it with `enable({ complete = false })`, which installs the handlers without touching the option — without that, accepting an item inserts a literal `${1:mod}` |
 
 `enable()` does not set `'autocomplete'` — CTRL-N reaches the source either
-way, and whether the menu opens by itself is your decision.
+way, and whether the menu opens by itself is your decision. With it on, an
+empty base returns nothing: the whole filetype is not a useful menu after
+every space, and Vim's own `.` source shows nothing there either. A manual
+CTRL-N with `'autocomplete'` off still lists the lot.
 
 If you set `'complete'` yourself — a config that owns the option, or one that
 caps the source — pair it with `enable({ complete = false })`, which installs

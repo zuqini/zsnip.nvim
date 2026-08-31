@@ -35,8 +35,13 @@ function M:is_available()
   return true
 end
 
----Triggers are not all words: `#!` and `<div` have to be completable too, so
----the keyword is either a run of word characters or a run of symbols.
+---Deliberately not `completion.run_start()`'s run (`%S+`): this is nvim-cmp's
+---re-query granularity, not the span a trigger replaces. cmp only asks a
+---source again when the keyword offset moves, and zsnip's head/`textEdit`
+---are computed per run, so the word-or-symbol alternation makes cmp re-query
+---at every word/symbol boundary (`console` -> `console.` -> `.log`) where
+---the head can change; `\S\+` would leave cmp filtering a response anchored
+---to a shorter run instead of asking again.
 ---@return string
 function M:get_keyword_pattern()
   return [[\%(\k\+\|[^[:space:][:alnum:]_]\+\)]]

@@ -11,12 +11,13 @@
 ---deal every real server offers.
 
 local completion = require('zsnip.completion')
+local registry = require('zsnip.registry')
 
 local M = {}
 
 ---@class zsnip.LspOpts : zsnip.SourceOpts
----@field name? string Client name, as it appears in `:LspInfo` (default 'zsnip')
----@field filetypes? string[] Attach only to these filetypes (default: all)
+---@field name? string Client name, as it appears in `:checkhealth vim.lsp` (default 'zsnip')
+---@field filetypes? string[] Attach only to these filetypes, or a dotted one's dot-separated components (default: all)
 ---@field trigger_characters? string[] Characters that make a client ask unprompted (default: none)
 ---@field completion? boolean|vim.lsp.completion.BufferOpts Wire each buffer up for |vim.lsp.completion|
 
@@ -67,8 +68,7 @@ local function server(opts)
     ---@return lsp.CompletionList
     local function complete(params)
       local bufnr = requesting_buffer(vim.tbl_get(params or {}, 'textDocument', 'uri'))
-      local forwarded = completion.source_opts(opts, bufnr)
-      forwarded.position = params and params.position or nil
+      local forwarded = completion.source_opts(opts, bufnr, params and params.position or nil)
       return { isIncomplete = false, items = completion.items(forwarded) }
     end
 
@@ -116,6 +116,11 @@ local function server(opts)
       ---`autotrigger`, one per keystroke. Deferred, it lands after
       ---|vim.lsp.Client:request()| has registered the request, which is the
       ---ordinary out-of-process order and needs no version guard.
+      ---
+      ---answer() is pcall'd for the same reason: an opts.filter or a
+      ---clipboard read that raises must not skip callback() and notify_reply()
+      ----- the pending-request leak above, one per keystroke under
+      ---`autotrigger`, but from the handler failing instead of never running.
       request = function(method, params, callback, notify_reply)
         request_id = request_id + 1
         local id = request_id
@@ -124,7 +129,12 @@ local function server(opts)
           if closing then
             return
           end
-          callback(nil, answer(method, params), id)
+          local ok, result = pcall(answer, method, params)
+          if ok then
+            callback(nil, result, id)
+          else
+            callback({ code = -32603, message = tostring(result) }, nil, id)
+          end
           if notify_reply then
             notify_reply(id)
           end
@@ -162,23 +172,68 @@ local augroup = nil
 ---@type string?
 local client_name = nil
 
----Start the server and attach it to every buffer that gets a filetype.
----Idempotent: calling it again replaces the autocmd rather than stacking one.
+---`vim.lsp.get_clients()`, but seeing a client of ours started this same
+---tick: our server answers `initialize` on the next tick (see `request()`'s
+---`vim.schedule`), so without this a lookup right after `vim.lsp.start()`
+---misses it.
+---@param filter vim.lsp.get_clients.Filter
+---@return vim.lsp.Client[]
+local function own_clients(filter)
+  ---@diagnostic disable-next-line: invisible -- `package` in core's own annotation
+  filter._uninitialized = true
+  return vim.lsp.get_clients(filter)
+end
+
+---Whether `filetype` or, for a dotted one such as `javascript.glimmer`, any
+---of its dot-separated components is in `filetypes` -- the same components
+---the registry serves snippets from, so a gate naming `javascript` still
+---attaches to the buffers `javascript.glimmer` is assigned to.
+---@param filetype string
+---@param filetypes string[]
+---@return boolean
+local function filetype_allowed(filetype, filetypes)
+  for _, component in ipairs(registry.components(filetype)) do
+    if vim.tbl_contains(filetypes, component) then
+      return true
+    end
+  end
+  return false
+end
+
+---Start the server and attach it to the buffers `allowed()` below admits.
+---Idempotent: calling it again stops whatever a previous call started --
+---clients included -- before registering the new one, so new opts always
+---reach every buffer rather than piling a second server on top of the first.
 ---@param opts? zsnip.LspOpts
 function M.start(opts)
+  M.stop()
   opts = opts or {}
   local name = opts.name or 'zsnip'
   local cmd = server(opts)
 
-  local function attach(bufnr)
+  ---Whether `bufnr` should hold the client. A scratch or prompt buffer is
+  ---wasted on one, and on the prompt specifically it is worse than wasted:
+  ---autotrigger fires unprompted noise on every keystroke of a buffer
+  ---nothing is ever typed as code into.
+  local function allowed(bufnr)
     local filetype = vim.bo[bufnr].filetype
-    if filetype == '' then
-      return
+    return filetype ~= ''
+      and vim.bo[bufnr].buftype == ''
+      and (not opts.filetypes or filetype_allowed(filetype, opts.filetypes))
+  end
+
+  local function attach(bufnr)
+    if allowed(bufnr) then
+      vim.lsp.start({ name = name, cmd = cmd }, { bufnr = bufnr })
+    else
+      -- The gate re-runs on every FileType, both directions: a buffer that
+      -- lost its match (`lua` -> `python`, or `lua` -> ``) must lose the
+      -- client it already has, or it keeps answering completion with the
+      -- old filetype's snippets forever.
+      for _, client in ipairs(own_clients({ bufnr = bufnr, name = name })) do
+        vim.lsp.buf_detach_client(bufnr, client.id)
+      end
     end
-    if opts.filetypes and not vim.tbl_contains(opts.filetypes, filetype) then
-      return
-    end
-    vim.lsp.start({ name = name, cmd = cmd }, { bufnr = bufnr })
   end
 
   client_name = name
@@ -226,7 +281,7 @@ function M.stop()
   if augroup then
     pcall(vim.api.nvim_del_augroup_by_id, augroup)
   end
-  for _, client in ipairs(client_name and vim.lsp.get_clients({ name = client_name }) or {}) do
+  for _, client in ipairs(client_name and own_clients({ name = client_name }) or {}) do
     client:stop(true)
   end
   augroup, client_name = nil, nil
@@ -241,7 +296,8 @@ end
 
 ---Whether a client is actually up. Registered is not the same as serving: a
 ---`filetypes` list that excluded every buffer opened so far, or a `:LspStop`,
----leaves the autocmd in place with nothing behind it.
+---leaves the autocmd in place with nothing behind it. Deliberately not
+---`own_clients()`: an uninitialized client is not yet serving either.
 ---@return boolean
 function M.running()
   return client_name ~= nil and #vim.lsp.get_clients({ name = client_name }) > 0

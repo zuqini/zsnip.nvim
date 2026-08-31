@@ -63,13 +63,19 @@ so the module loads fine on a config without it.
 require('zsnip.complete').enable()
 
 vim.o.autocomplete = true            -- optional; CTRL-N reaches it either way
-vim.o.completeopt = 'menu,popup,noinsert'
+vim.o.completeopt = 'menu,popup,noinsert,fuzzy'
 ```
 
 A function source in `'complete'`, which `'autocomplete'` drives as you type.
 No completion plugin, and unlike the LSP server, no LSP client either —
 `enable()` appends one entry to `'complete'` and installs two handlers: a
-`CompleteDone` expander and a `CompleteChanged` stylist for the preview.
+`CompleteDone` expander, which only fires on an accepted item — `<C-y>`, or a
+mapping that sends it; `<CR>`, `<Space>` and `<Tab>` are *discard* in Vim, same
+as a typed character or `<Esc>`, and never expand — and a `CompleteChanged`
+stylist for the preview.
+Because `'complete'` is buffer-local, `enable()` appends to the global default
+and to every buffer already open, not just the current one, so lazy-loading
+it on `InsertEnter` still reaches buffers that were open before that fired.
 
 Snippets then rank next to buffer words in a single menu, and each source can
 be capped on its own. Setting `'complete'` yourself means `enable()` should not
@@ -86,7 +92,10 @@ capped setup is still recognised — by `:checkhealth zsnip` too.
 
 `enable()` takes the same `limit`, `documentation` and `filter` as the other
 sources. It deliberately does not touch `'autocomplete'`: whether the menu
-opens by itself is your decision, not zsnip's.
+opens by itself is your decision, not zsnip's. With it on, an empty base
+returns nothing — the whole filetype is not a useful menu after every space,
+and Vim's own `.` source shows nothing there either; a manual CTRL-N with
+`'autocomplete'` off still lists the lot.
 
 The preview shows exactly what `vim.lsp.completion` would render for the same
 snippet — the description as prose, then the body syntax-highlighted — so the
@@ -102,8 +111,11 @@ Two things are specific to this path:
 - **zsnip does the matching.** The other three hand the whole filetype over
   and let the engine filter; here the completion function is given the text to
   match and returns `{ refresh = 'always' }`, so it is re-asked on every
-  change and stays in control. That means the fuzzy match is zsnip's — add
-  `fuzzy` to `'completeopt'` if you want Vim's own narrowing to agree with it.
+  change and stays in control. That means the fuzzy match is zsnip's, and
+  without `fuzzy` in `'completeopt'` Vim narrows the result again by its own
+  plain-keyword rule — so a hit whose `word` is not a prefix of the keyword
+  under the cursor (`clog` for `console.log`, `rq` for `req`) is filtered back
+  out and never shown at all.
 - **zsnip does the expanding.** Nothing else on this path knows what a snippet
   body is, so `enable()`'s `CompleteDone` handler replaces the accepted
   trigger and calls `vim.snippet.expand()`. The range it replaces is the whole
@@ -241,6 +253,12 @@ reads its own user-snippets folder, so you can point one at
 | `<language>.json` | the filetype the file is named after — `python.json`, `lua.json` |
 | `*.code-snippets` | whichever languages each snippet's `scope` names, comma-separated; an entry with no `scope` goes to every filetype, through `global_filetype` |
 | `package.json` | if one is present it still decides, and the files it names are not read a second time from the glob |
+
+`scope` decides who a file serves in the `*.code-snippets` row alone — the
+other two take their filetype from a filename and from the manifest, and a
+`scope` key inside one of those is ignored rather than filtered on. Real packs
+carry TextMate scopes (`source.lua`) there harmlessly, and filtering on them
+drops most of what the pack serves.
 
 Loose files are only looked for under a `paths` directory you configured.
 Plugins on the runtimepath declare what they contribute in a `package.json`,

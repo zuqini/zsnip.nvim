@@ -6,6 +6,29 @@ local util = require('zsnip.util')
 
 local M = {}
 
+---A body or description as one string. Anything that is not a string or a
+---number is dropped rather than concatenated: JSON arrays come from other
+---people's packs, and a `null` (userdata, once decoded) or a nested object
+---raises out of table.concat -- which would take down every snippet for that
+---filetype, from inside whatever asked for them. An array that yields nothing
+---usable is nil, not '': an empty body is a menu entry that inserts nothing.
+---@param value string|number|(string|number)[]|nil
+---@return string?
+local function joined(value)
+  if type(value) == 'table' then
+    local strings = {}
+    for _, element in ipairs(value) do
+      if type(element) == 'string' or type(element) == 'number' then
+        strings[#strings + 1] = tostring(element)
+      end
+    end
+    return #strings > 0 and table.concat(strings, '\n') or nil
+  elseif type(value) == 'string' then
+    return value
+  end
+  return nil
+end
+
 ---Snippet files declared by one `package.json`.
 ---
 ---Every plugin's `package.json` is read, not just snippet packs, so nothing
@@ -75,9 +98,13 @@ end
 
 ---@param path string
 ---@param language? string Drop snippets whose `scope` excludes it; nil keeps all
----@return zsnip.Snippet[]
+---@return zsnip.Snippet[] snippets
+---@return string[] extends Always empty; VSCode packs have no inheritance directive
 function M.parse(path, language)
-  local snippets = {}
+  -- Carried alongside the snippet, not inside it, so two definitions sharing
+  -- a prefix can break the tie below without the tie-break leaking into what
+  -- gets returned.
+  local entries = {}
   for name, def in pairs(util.read_json(path) or {}) do
     -- Every value is someone else's JSON: a non-table entry would raise from
     -- inside whatever asked for this filetype's snippets.
@@ -86,16 +113,19 @@ function M.parse(path, language)
       def = nil
     end
     if type(def) == 'table' then
-      local body = util.joined(def.body)
+      local body = joined(def.body)
       -- A prefix list means several triggers expand the same body.
       local prefixes = type(def.prefix) == 'table' and def.prefix or { def.prefix or name }
       if body then
         for _, prefix in ipairs(prefixes) do
           if type(prefix) == 'string' then
-            snippets[#snippets + 1] = {
-              prefix = prefix,
-              body = body,
-              description = util.joined(def.description),
+            entries[#entries + 1] = {
+              name = name,
+              snippet = {
+                prefix = prefix,
+                body = body,
+                description = joined(def.description),
+              },
             }
           end
         end
@@ -104,11 +134,21 @@ function M.parse(path, language)
   end
 
   -- pairs() over a JSON object has no order of its own; sort so the same pack
-  -- produces the same menu on every start.
-  table.sort(snippets, function(a, b)
-    return a.prefix < b.prefix
+  -- produces the same menu on every start. Two definitions sharing a prefix
+  -- break the tie on the definition name, so which one matches() prefers does
+  -- not depend on pairs()'s iteration order either.
+  table.sort(entries, function(a, b)
+    if a.snippet.prefix ~= b.snippet.prefix then
+      return a.snippet.prefix < b.snippet.prefix
+    end
+    return a.name < b.name
   end)
-  return snippets
+
+  local snippets = {}
+  for i, entry in ipairs(entries) do
+    snippets[i] = entry.snippet
+  end
+  return snippets, {}
 end
 
 return M

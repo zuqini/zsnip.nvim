@@ -31,6 +31,21 @@ describe('the blink.cmp source', function()
     assert.are.equal(vim.lsp.protocol.InsertTextFormat.Snippet, response.items[1].insertTextFormat)
   end)
 
+  -- A non-string description (an array-form vscode description not joined by
+  -- something upstream, or a config typo) must not take the whole response
+  -- down with it -- document() is the only place a raw `..` still ran.
+  it('survives a non-string description instead of losing the whole response', function()
+    registry.add('lua', { { prefix = 'req', body = "require '$1'", description = { 'line one', 'line two' } } })
+
+    local response
+    blink.new():get_completions({ bufnr = lua_buffer() }, function(result)
+      response = result
+    end)
+
+    assert.are.equal(1, #response.items)
+    assert.is_not_nil(response.items[1].documentation)
+  end)
+
   it('leaves the cap off so blink can filter the whole filetype', function()
     local snippets = {}
     for index = 1, 150 do

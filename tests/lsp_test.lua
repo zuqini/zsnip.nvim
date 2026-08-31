@@ -33,6 +33,31 @@ local function request(client, method, params)
   return result
 end
 
+---A buffer backed by a real file under `helpers.tempdir()` -- the URI round
+---trip a real client's completion request takes, unlike `helpers.typed()`'s
+---scratch buffer.
+---@param filetype string
+---@param name? string defaults to a name derived from the filetype
+---@return integer
+local function named_buffer(filetype, name)
+  local bufnr = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(bufnr, helpers.tempdir() .. '/' .. (name or ('attach.' .. filetype)))
+  vim.bo[bufnr].filetype = filetype
+  return bufnr
+end
+
+---A buffer with no name at all, made current -- deliberately, to exercise
+---`lsp.requesting_buffer()`'s fallback to the current buffer, not the URI
+---round trip `named_buffer()` covers.
+---@param filetype string
+---@return integer
+local function unnamed_buffer(filetype)
+  local bufnr = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_set_current_buf(bufnr)
+  vim.bo[bufnr].filetype = filetype
+  return bufnr
+end
+
 describe('the in-process server', function()
   it('advertises completion', function()
     local client = start_server()
@@ -55,9 +80,7 @@ describe('the in-process server', function()
     registry.add('lua', { { prefix = 'req', body = "require '$1'" } })
     registry.add('python', { { prefix = 'imp', body = 'import $1' } })
 
-    local bufnr = vim.api.nvim_create_buf(false, false)
-    vim.api.nvim_buf_set_name(bufnr, helpers.tempdir() .. '/file.lua')
-    vim.bo[bufnr].filetype = 'lua'
+    local bufnr = named_buffer('lua', 'file.lua')
 
     local client = start_server()
     local result = request(client, 'textDocument/completion', {
@@ -79,9 +102,7 @@ describe('the in-process server', function()
     end
     registry.add('lua', snippets)
 
-    local bufnr = vim.api.nvim_create_buf(false, false)
-    vim.api.nvim_buf_set_name(bufnr, helpers.tempdir() .. '/big.lua')
-    vim.bo[bufnr].filetype = 'lua'
+    local bufnr = named_buffer('lua', 'big.lua')
 
     local result = request(start_server(), 'textDocument/completion', {
       textDocument = { uri = vim.uri_from_bufnr(bufnr) },
@@ -95,9 +116,7 @@ describe('the in-process server', function()
   it('forwards documentation and filter to the completion items', function()
     registry.add('lua', { { prefix = 'req', body = 'b' }, { prefix = 'skip', body = 'b' } })
 
-    local bufnr = vim.api.nvim_create_buf(false, false)
-    vim.api.nvim_buf_set_name(bufnr, helpers.tempdir() .. '/opts.lua')
-    vim.bo[bufnr].filetype = 'lua'
+    local bufnr = named_buffer('lua', 'opts.lua')
     local params = {
       textDocument = { uri = vim.uri_from_bufnr(bufnr) },
       position = { line = 0, character = 0 },
@@ -149,6 +168,38 @@ describe('the in-process server', function()
     end))
     assert.are.same({ 1, 2, 3 }, replied)
     assert.are.same({ 1, 2, 3 }, ids)
+  end)
+
+  -- pcall'd for the same reason notify_reply is unconditional above: a
+  -- filter or documentation resolver that raises must not skip callback() or
+  -- notify_reply() -- the same pending-request leak, from the handler failing
+  -- instead of never running.
+  it('answers with an error rather than leaking the request when the handler raises', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = named_buffer('lua', 'boom.lua')
+
+    local client = start_server({
+      filter = function()
+        error('boom')
+      end,
+    })
+    local err, replied = nil, false
+    client.request('textDocument/completion', {
+      textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+      position = { line = 0, character = 0 },
+    }, function(request_err)
+      err = request_err
+    end, function()
+      replied = true
+    end)
+
+    assert.is_true(vim.wait(2000, function()
+      return replied
+    end))
+    assert.is_not_nil(err)
+    assert.are.equal(-32603, err.code)
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
   end)
 
   it('still answers a client that offers no reply callback', function()
@@ -216,15 +267,6 @@ end)
 describe('lsp.start', function()
   after_each(helpers.stop_lsp)
 
-  ---@param filetype string
-  ---@return integer
-  local function buffer(filetype)
-    local bufnr = vim.api.nvim_create_buf(true, false)
-    vim.api.nvim_buf_set_name(bufnr, helpers.tempdir() .. '/attach.' .. filetype)
-    vim.bo[bufnr].filetype = filetype
-    return bufnr
-  end
-
   -- vim.lsp's client registry is global and outlives a busted test, and
   -- vim.lsp.start() reuses by name. A name per test keeps these independent of
   -- whatever the rest of the suite left behind; the *shipped* name is what the
@@ -262,7 +304,7 @@ describe('lsp.start', function()
   -- by enable(), so an accepted snippet would put `${1:mod}` in the buffer.
   it('wires the buffer up for vim.lsp.completion when asked', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
-    local bufnr = buffer('lua')
+    local bufnr = named_buffer('lua')
 
     assert.are.equal(0, completedone_handlers(bufnr))
     local name = start({ completion = true })
@@ -274,7 +316,7 @@ describe('lsp.start', function()
 
   it('leaves completion alone by default', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
-    local bufnr = buffer('lua')
+    local bufnr = named_buffer('lua')
 
     local name = start()
     assert.are.equal(1, attached(bufnr, name))
@@ -287,7 +329,7 @@ describe('lsp.start', function()
   -- language servers as a side effect of asking for snippets.
   it('wires up only its own client', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
-    local bufnr = buffer('lua')
+    local bufnr = named_buffer('lua')
     local name = start({ completion = true })
     assert.are.equal(1, attached(bufnr, name))
 
@@ -305,7 +347,7 @@ describe('lsp.start', function()
 
   it('attaches to a buffer that already had a filetype', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
-    local bufnr = buffer('lua')
+    local bufnr = named_buffer('lua')
 
     local name = start()
 
@@ -315,7 +357,7 @@ describe('lsp.start', function()
 
   it('attaches to a buffer that gets one afterwards', function()
     local name = start()
-    local bufnr = buffer('python')
+    local bufnr = named_buffer('python')
 
     assert.are.equal(1, attached(bufnr, name))
     vim.api.nvim_buf_delete(bufnr, { force = true })
@@ -323,7 +365,7 @@ describe('lsp.start', function()
 
   it('honours the filetypes gate', function()
     local name = start({ filetypes = { 'lua' } })
-    local wanted, unwanted = buffer('lua'), buffer('python')
+    local wanted, unwanted = named_buffer('lua'), named_buffer('python')
 
     assert.are.equal(1, attached(wanted, name))
     assert.are.equal(0, #vim.lsp.get_clients({ bufnr = unwanted, name = name }))
@@ -332,13 +374,90 @@ describe('lsp.start', function()
     vim.api.nvim_buf_delete(unwanted, { force = true })
   end)
 
+  -- The gate ran only on attach: a buffer allowed when its filetype was first
+  -- set kept the client after the filetype changed to an excluded one.
+  it('detaches when the filetype changes away from the gate', function()
+    local name = start({ filetypes = { 'lua' } })
+    local bufnr = named_buffer('lua')
+    assert.are.equal(1, attached(bufnr, name))
+
+    vim.bo[bufnr].filetype = 'python'
+    assert.is_true(vim.wait(2000, function()
+      return #vim.lsp.get_clients({ bufnr = bufnr, name = name }) == 0
+    end))
+
+    vim.bo[bufnr].filetype = 'lua'
+    assert.are.equal(1, attached(bufnr, name))
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  -- filetype == '' was its own early return that never reached the detach
+  -- loop, so `:set ft=` left the client attached -- the one exclusion the
+  -- gate did not reconcile.
+  it('detaches when the filetype is cleared, without a filetypes gate', function()
+    local name = start()
+    local bufnr = named_buffer('lua')
+    assert.are.equal(1, attached(bufnr, name))
+
+    vim.bo[bufnr].filetype = ''
+    assert.is_true(vim.wait(2000, function()
+      return #vim.lsp.get_clients({ bufnr = bufnr, name = name }) == 0
+    end))
+
+    vim.bo[bufnr].filetype = 'lua'
+    assert.are.equal(1, attached(bufnr, name))
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  -- Neovim assigns dotted filetypes itself (javascript.glimmer) and users set
+  -- others (yaml.ansible); the registry serves both the dotted filetype and
+  -- each dot-separated component, so the gate has to honour a component too.
+  it('honours the filetypes gate against a dot-separated component', function()
+    local name = start({ filetypes = { 'javascript' } })
+    local bufnr = named_buffer('javascript.glimmer')
+
+    assert.are.equal(1, attached(bufnr, name))
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  -- 'javascript.glimmer' is not one of its own components ('javascript',
+  -- 'glimmer'), so naming it exactly must also attach.
+  it('honours the filetypes gate against the exact dotted filetype', function()
+    local name = start({ filetypes = { 'javascript.glimmer' } })
+    local bufnr = named_buffer('javascript.glimmer')
+
+    assert.are.equal(1, attached(bufnr, name))
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  -- Prompts, help and other special buffers get a filetype too; a client
+  -- attached there would pop global-bucket snippets up inside them.
+  it('never attaches to a special buffer, even with a matching filetype', function()
+    local scratch = vim.api.nvim_create_buf(false, true)
+    vim.bo[scratch].filetype = 'lua'
+    local prompt = vim.api.nvim_create_buf(false, true)
+    vim.bo[prompt].buftype = 'prompt'
+    vim.bo[prompt].filetype = 'lua'
+
+    local name = start()
+
+    assert.are.equal('nofile', vim.bo[scratch].buftype)
+    assert.are.equal(0, #vim.lsp.get_clients({ bufnr = scratch, name = name }))
+    assert.are.equal(0, #vim.lsp.get_clients({ bufnr = prompt, name = name }))
+
+    vim.api.nvim_buf_delete(scratch, { force = true })
+    vim.api.nvim_buf_delete(prompt, { force = true })
+  end)
+
   it('reports that it started, and stacks neither autocmd nor client', function()
     counter = counter + 1
     local name = 'zsnip_start_' .. counter
     lsp.start({ name = name })
     lsp.start({ name = name })
     lsp.start({ name = name })
-    local bufnr = buffer('lua')
+    local bufnr = named_buffer('lua')
 
     assert.is_true(lsp.started())
     assert.are.equal(1, attached(bufnr, name))
@@ -350,12 +469,120 @@ describe('lsp.start', function()
     vim.api.nvim_buf_delete(bufnr, { force = true })
   end)
 
+  -- A second start() under a different name used to leave the first name's
+  -- clients running alongside the new one, serving every snippet twice.
+  it('stops the previous clients when restarted under a new name', function()
+    registry.add('lua', { { prefix = 'req', body = 'b' } })
+    local bufnr = named_buffer('lua')
+
+    counter = counter + 1
+    local first = 'zsnip_start_' .. counter .. '_a'
+    lsp.start({ name = first })
+    assert.are.equal(1, attached(bufnr, first))
+
+    counter = counter + 1
+    local second = 'zsnip_start_' .. counter .. '_b'
+    lsp.start({ name = second })
+
+    assert.are.equal(1, attached(bufnr, second))
+    assert.are.equal(0, #vim.lsp.get_clients({ name = first }))
+    assert.is_true(lsp.running())
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  -- A second start() under the *same* name reused the running client, so a
+  -- changed trigger_characters never reached buffers already attached.
+  it('replaces a running client rather than reusing its stale opts', function()
+    local bufnr = named_buffer('lua')
+
+    counter = counter + 1
+    local name = 'zsnip_start_' .. counter
+    lsp.start({ name = name, trigger_characters = { 'a' } })
+    assert.are.equal(1, attached(bufnr, name))
+
+    lsp.start({ name = name, trigger_characters = { 'b' } })
+
+    -- The old client lingers in get_clients() until its own deferred
+    -- detach runs, so waiting for "any client of this name" is not enough:
+    -- wait for the one client left standing to be the new one.
+    assert.is_true(vim.wait(2000, function()
+      local clients = vim.lsp.get_clients({ bufnr = bufnr, name = name })
+      return #clients == 1
+        and vim.deep_equal(clients[1].server_capabilities.completionProvider.triggerCharacters, { 'b' })
+    end))
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  -- get_clients() without _uninitialized skips a client that has not yet
+  -- answered `initialize`, which a client started this same tick never has.
+  -- The restart above waits for attachment between the two start() calls, so
+  -- it never exercises that miss; this one does not wait.
+  it('applies new opts even when restarted before the old client initialized', function()
+    registry.add('lua', {
+      { prefix = 'a', body = 'b' },
+      { prefix = 'b', body = 'b' },
+      { prefix = 'c', body = 'b' },
+    })
+    local bufnr = named_buffer('lua')
+
+    counter = counter + 1
+    local name = 'zsnip_start_' .. counter
+    lsp.start({ name = name, limit = 1 })
+    lsp.start({ name = name })
+
+    assert.are.equal(1, attached(bufnr, name))
+    local client = vim.lsp.get_clients({ bufnr = bufnr, name = name })[1]
+    local items = nil
+    client:request('textDocument/completion', {
+      textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+      position = { line = 0, character = 0 },
+    }, function(_, result)
+      items = result.items
+    end, bufnr)
+
+    assert.is_true(vim.wait(2000, function()
+      return items ~= nil
+    end))
+    assert.are.equal(3, #items)
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it('stops a client that has not initialized yet', function()
+    counter = counter + 1
+    local name = 'zsnip_start_' .. counter
+    lsp.start({ name = name })
+    lsp.stop()
+
+    assert.is_true(vim.wait(2000, function()
+      return #vim.lsp.get_clients({ name = name, _uninitialized = true }) == 0
+    end))
+  end)
+
+  -- Same miss as above, reached through the filetypes gate's detach arm
+  -- instead of stop(): the first buffer's client is still uninitialized when
+  -- the very next FileType event asks to detach it.
+  it('detaches a client that has not initialized yet when the filetype changes away from the gate', function()
+    local name = start({ filetypes = { 'lua' } })
+    local bufnr = named_buffer('lua')
+
+    vim.bo[bufnr].filetype = 'python'
+
+    assert.is_true(vim.wait(2000, function()
+      return #vim.lsp.get_clients({ bufnr = bufnr, name = name, _uninitialized = true }) == 0
+    end))
+
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
   -- The leak this guards is only observable through the real client: the
   -- server's reply callback is what stops Client:request() registering a
   -- request it will never clear.
   it('leaves no request pending after a completion through a real client', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
-    local bufnr = buffer('lua')
+    local bufnr = named_buffer('lua')
     local name = start()
     assert.are.equal(1, attached(bufnr, name))
 
@@ -379,7 +606,7 @@ describe('lsp.start', function()
 
   it('serves the shipped name to a buffer', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
-    local bufnr = buffer('lua')
+    local bufnr = named_buffer('lua')
 
     lsp.start()
 
@@ -396,9 +623,7 @@ describe('the in-process server and awkward buffers', function()
   -- onto the same bufnr.
   it('serves a buffer that has no name', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
-    local bufnr = vim.api.nvim_create_buf(true, false)
-    vim.api.nvim_set_current_buf(bufnr)
-    vim.bo[bufnr].filetype = 'lua'
+    local bufnr = unnamed_buffer('lua')
 
     local result = request(start_server(), 'textDocument/completion', {
       textDocument = { uri = vim.uri_from_bufnr(bufnr) },
@@ -412,9 +637,7 @@ describe('the in-process server and awkward buffers', function()
 
   it('serves a request that names no document at all', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
-    local bufnr = vim.api.nvim_create_buf(true, false)
-    vim.api.nvim_set_current_buf(bufnr)
-    vim.bo[bufnr].filetype = 'lua'
+    local bufnr = unnamed_buffer('lua')
 
     local result = request(start_server(), 'textDocument/completion', { position = { line = 0, character = 0 } })
 
@@ -431,9 +654,7 @@ describe('lsp.stop', function()
   -- API gets back to a clean state short of restarting Neovim.
   it('undoes start, autocmd and clients alike', function()
     registry.add('lua', { { prefix = 'req', body = 'b' } })
-    local bufnr = vim.api.nvim_create_buf(true, false)
-    vim.api.nvim_buf_set_name(bufnr, helpers.tempdir() .. '/stop.lua')
-    vim.bo[bufnr].filetype = 'lua'
+    local bufnr = named_buffer('lua', 'stop.lua')
     helpers.start_lsp()
 
     assert.is_true(lsp.started())

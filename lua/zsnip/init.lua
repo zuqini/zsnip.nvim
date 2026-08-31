@@ -30,7 +30,7 @@ M.version = '0.1.0' -- x-release-please-version
 ---@param opts? zsnip.Config
 function M.setup(opts)
   config.setup(opts)
-  if config.options.command ~= false then
+  if config.options.command then
     require('zsnip.commands').create()
   else
     require('zsnip.commands').remove()
@@ -135,7 +135,12 @@ function M.match()
   for _, snippet in ipairs(registry.get(vim.bo.filetype)) do
     if vim.endswith(before, snippet.prefix) and (not matched or #snippet.prefix > #matched.prefix) then
       local preceding = before:sub(#before - #snippet.prefix, #before - #snippet.prefix)
-      if not (snippet.prefix:match('^[%w_]') and preceding:match('[%w_]')) then
+      -- A byte >= 0x80 is always a continuation or lead byte of a multi-byte
+      -- character, never a boundary -- [%w_] alone is ASCII-only and would
+      -- treat the trailing byte of `é` as a delimiter, letting `ax` fire
+      -- inside `éax`, and a leading `é` in the trigger itself as a symbol,
+      -- letting it fire inside a word the way only a symbol trigger should.
+      if not (snippet.prefix:match('^[%w_\128-\255]') and preceding:match('[%w_\128-\255]')) then
         matched = snippet
       end
     end

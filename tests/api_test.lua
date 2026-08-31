@@ -4,34 +4,28 @@ local zsnip = require('zsnip')
 
 ---@type integer?
 local bufnr = nil
----@type string?
-local saved_virtualedit = nil
 
 before_each(function()
   helpers.reset()
-  bufnr = vim.api.nvim_create_buf(false, true)
-  vim.bo[bufnr].filetype = 'lua'
-  vim.api.nvim_set_current_buf(bufnr)
   -- The trigger sits *behind* the cursor, so these tests need the cursor one
   -- past the last character -- where insert mode puts it, and where normal
-  -- mode clamps it back from unless 'virtualedit' allows it.
-  saved_virtualedit = vim.o.virtualedit
-  vim.o.virtualedit = 'onemore'
+  -- mode clamps it back from unless 'virtualedit' allows it. typed() saves
+  -- and cleanup() restores it.
+  bufnr = helpers.typed('lua')
 end)
 
 after_each(function()
-  vim.o.virtualedit = saved_virtualedit
-  vim.snippet.stop()
+  -- cleanup() stops the snippet session first, which needs bufnr still
+  -- current -- so it has to run before the buffer behind it is gone.
+  helpers.cleanup()
   if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
     vim.api.nvim_buf_delete(bufnr, { force = true })
   end
-  helpers.cleanup()
 end)
 
 ---@param line string
 local function type_line(line)
-  vim.api.nvim_buf_set_lines(0, 0, -1, false, { line })
-  vim.api.nvim_win_set_cursor(0, { 1, #line })
+  bufnr = helpers.typed('lua', line)
 end
 
 describe('zsnip.match', function()
@@ -55,6 +49,40 @@ describe('zsnip.match', function()
     type_line('max')
 
     assert.is_nil(zsnip.match())
+  end)
+
+  -- The byte before 'ax' here is the continuation byte of 'é', not a space --
+  -- [%w_] alone is ASCII-only and would call that a word boundary, firing the
+  -- trigger in the middle of a word same as 'max' does above.
+  it('will not fire a word trigger inside a multi-byte word', function()
+    registry.add('lua', { { prefix = 'ax', body = 'b' } })
+    type_line('éax')
+
+    assert.is_nil(zsnip.match())
+  end)
+
+  it('still fires after a symbol', function()
+    registry.add('lua', { { prefix = 'ax', body = 'b' } })
+    type_line('(ax')
+
+    assert.are.equal('ax', zsnip.match().prefix)
+  end)
+
+  -- A trigger that itself starts with a multi-byte letter is still a keyword
+  -- trigger: [%w_] alone is ASCII-only and would call 'é' a symbol, letting
+  -- it fire inside a word the way only a symbol trigger should.
+  it('will not fire a multi-byte-leading trigger inside a word', function()
+    registry.add('lua', { { prefix = 'éa', body = 'b' } })
+    type_line('xéa')
+
+    assert.is_nil(zsnip.match())
+  end)
+
+  it('still fires a multi-byte-leading trigger after a symbol', function()
+    registry.add('lua', { { prefix = 'éa', body = 'b' } })
+    type_line('(éa')
+
+    assert.are.equal('éa', zsnip.match().prefix)
   end)
 
   it('fires a symbol trigger anywhere', function()
@@ -105,6 +133,36 @@ describe('zsnip.expand', function()
   it('refuses a snippet whose body cannot be produced', function()
     assert.is_false(zsnip.expand_snippet({ prefix = 'x', body = function() return nil end }))
   end)
+
+  -- An unregistered table has no `filetype` stamp, so nothing has normalized
+  -- it yet -- expand() would otherwise raise on a body the grammar rejects,
+  -- rather than reporting it the way every other unusable snippet is.
+  it('refuses rather than raises on an unparseable body handed to it directly', function()
+    type_line('')
+    assert.is_false(zsnip.expand_snippet({ prefix = 'x', body = '${' }))
+  end)
+
+  it('renumbers the final tabstop of a body handed to it directly', function()
+    type_line('')
+    assert.is_true(zsnip.expand_snippet({ prefix = 'x', body = 'a ${0:foo}' }))
+    assert.is_true(zsnip.active())
+  end)
+
+  -- A body that is only a comment variable can resolve to '' -- here,
+  -- $BLOCK_COMMENT_START outside a block comment -- and vim.snippet.expand()
+  -- raises on ''. The trigger must stay put rather than being deleted ahead
+  -- of a raise.
+  it('refuses a trigger whose body resolves to nothing', function()
+    local saved = vim.bo.commentstring
+    vim.bo.commentstring = '-- %s'
+    registry.add('lua', { { prefix = 'req', body = '$BLOCK_COMMENT_START' } })
+    type_line('req')
+
+    assert.is_false(zsnip.expand())
+    assert.are.equal('req', vim.api.nvim_buf_get_lines(0, 0, -1, false)[1])
+
+    vim.bo.commentstring = saved
+  end)
 end)
 
 describe('zsnip session wrappers', function()
@@ -124,8 +182,8 @@ describe('the public surface', function()
   it('exposes what the docs promise', function()
     for _, name in ipairs({
       'setup', 'add_snippets', 'filetype_extend', 'get', 'available', 'completion_items',
-      'start_lsp_server', 'resolve', 'reload', 'match', 'expandable', 'expand', 'expand_snippet',
-      'expand_or_jump', 'jump', 'jumpable', 'active', 'stop',
+      'start_lsp_server', 'stop_lsp_server', 'resolve', 'reload', 'match', 'expandable', 'expand',
+      'expand_snippet', 'expand_or_jump', 'jump', 'jumpable', 'active', 'stop',
     }) do
       assert.are.equal('function', type(zsnip[name]), name .. ' is missing')
     end
@@ -182,7 +240,7 @@ describe('the public surface', function()
   end)
 end)
 
-describe('the public surface', function()
+describe('the public surface delegates', function()
   it('carries a version', function()
     assert.is_string(zsnip.version)
     assert.is_truthy(zsnip.version:match('^%d+%.%d+%.%d+$'))
@@ -254,14 +312,9 @@ end)
 describe('zsnip.setup validation', function()
   ---@return string[]
   local function warnings(opts)
-    local notify, collected = vim.notify, {}
-    vim.notify = function(message)
-      collected[#collected + 1] = message
-    end
-    local ok, err = pcall(zsnip.setup, opts)
-    vim.notify = notify
-    assert(ok, err)
-    return collected
+    return helpers.notifications(function()
+      zsnip.setup(opts)
+    end)
   end
 
   -- A merged-in typo is a silent no-op that reads exactly like the option not
@@ -292,5 +345,41 @@ describe('zsnip.setup validation', function()
   it('keeps the rest of a config that has one bad key', function()
     warnings({ max_items = 7, nonsense = true })
     assert.are.equal(7, require('zsnip.config').options.max_items)
+  end)
+
+  -- A wrong-typed value used to be warned about and then merged in anyway --
+  -- max_items = 'lots' made every completion raise, rather than falling back
+  -- to the default the warning implied it would.
+  it('falls back to the default rather than applying a wrong-typed value', function()
+    warnings({ max_items = 'lots' })
+    assert.are.equal(100, require('zsnip.config').options.max_items)
+  end)
+
+  -- A fractional or negative max_items used to reach matchfuzzy() as-is and
+  -- raise E475 on every completion with a prefix, or reach it as a limit
+  -- matchfuzzy silently returns zero items for.
+  it('rejects a fractional or negative max_items but keeps 0, 3 and math.huge', function()
+    local said = warnings({ max_items = 2.5 })
+    assert.are.equal(1, #said)
+    assert.is_truthy(said[1]:match('max_items should be a non%-negative whole number or math.huge, got 2.5'))
+    assert.are.equal(100, require('zsnip.config').options.max_items)
+
+    for _, value in ipairs({ -1, -math.huge, 2.5 }) do
+      local rejected = warnings({ max_items = value })
+      assert.are.equal(1, #rejected, ('max_items = %s should warn'):format(value))
+      assert.are.equal(100, require('zsnip.config').options.max_items)
+    end
+
+    for _, value in ipairs({ 0, 3, math.huge }) do
+      assert.are.same({}, warnings({ max_items = value }))
+      assert.are.equal(value, require('zsnip.config').options.max_items)
+    end
+  end)
+
+  it('falls back to the default rather than applying global_filetype = true', function()
+    local said = warnings({ global_filetype = true })
+    assert.are.equal(1, #said)
+    assert.is_truthy(said[1]:match('global_filetype should be string or false, got true'))
+    assert.are.equal('all', require('zsnip.config').options.global_filetype)
   end)
 end)

@@ -53,11 +53,14 @@ nvim -u NONE -l tests/busted.lua --shuffle
   headless runner has no clipboard provider, its `reads.count` being what the
   batching specs assert on.
 - `tests/child.lua` — runs a fragment in a *child* Neovim and hands back what
-  it emitted. Insert-mode completion cannot be exercised in-process: `nvim -l`
-  has no main loop, so `nvim_feedkeys(..., 'n')` queues keys nothing reads,
-  and the `'x'` flag runs them in a nested exec where textlock forbids the
-  `complete()` call that is the whole point. Used by `integration_test.lua`
-  for the two keystroke-driven paths — `'complete'` and `vim.lsp.completion`.
+  it emitted. `nvim -l` has no main loop, so `nvim_feedkeys(..., 'n')` queues
+  keys nothing reads, and the `'x'` flag runs them in a nested exec where
+  textlock forbids a direct `complete()` call; a single menu can still be
+  driven in-process through the expression register (`in_insert()` in
+  `complete_test.lua`). The child is for what needs the main loop itself —
+  `'autocomplete'` timers, a menu that lives across turns. Used by
+  `integration_test.lua` for the two keystroke-driven paths — `'complete'` and
+  `vim.lsp.completion`.
 
 | Spec | Covers |
 | --- | --- |

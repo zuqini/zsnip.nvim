@@ -5,21 +5,27 @@ local M = {}
 
 local SUBCOMMANDS = { 'expand', 'list', 'reload' }
 
+---@param filetype string
+---@return string
+local function label(filetype)
+  return filetype == '' and '[no filetype]' or filetype
+end
+
 local function expand()
   local zsnip = require('zsnip')
+  local completion = require('zsnip.completion')
   local filetype = vim.bo.filetype
   local snippets = zsnip.get(filetype)
 
   if #snippets == 0 then
-    vim.notify(('zsnip: no snippets for %s'):format(filetype == '' and '[no filetype]' or filetype),
-      vim.log.levels.WARN)
+    vim.notify(('zsnip: no snippets for %s'):format(label(filetype)), vim.log.levels.WARN)
     return
   end
 
   vim.ui.select(snippets, {
     prompt = ('Snippets (%s)'):format(filetype),
     format_item = function(snippet)
-      return snippet.description and ('%s — %s'):format(snippet.prefix, snippet.description)
+      return snippet.description and ('%s — %s'):format(snippet.prefix, completion.one_line(snippet.description))
         or snippet.prefix
     end,
   }, function(choice)
@@ -33,6 +39,7 @@ end
 ---which filetype did each entry come from" -- the question inheritance and
 ---the global bucket make hard to eyeball.
 local function list()
+  local completion = require('zsnip.completion')
   local filetype = vim.bo.filetype
   local snippets = require('zsnip').get(filetype)
 
@@ -41,10 +48,10 @@ local function list()
     width = math.max(width, #snippet.prefix)
   end
 
-  local lines = { ('# %d snippet(s) for %s'):format(#snippets, filetype == '' and '[no filetype]' or filetype), '' }
+  local lines = { ('# %d snippet(s) for %s'):format(#snippets, label(filetype)), '' }
   for _, snippet in ipairs(snippets) do
-    lines[#lines + 1] = ('%-' .. width .. 's  %-12s %s')
-      :format(snippet.prefix, snippet.filetype or '', snippet.description or '')
+    local description = snippet.description and completion.one_line(snippet.description) or ''
+    lines[#lines + 1] = ('%-' .. width .. 's  %-12s %s'):format(snippet.prefix, snippet.filetype or '', description)
   end
 
   -- `bufhidden = wipe` only reclaims the name once the buffer is hidden, so a
@@ -57,10 +64,14 @@ local function list()
 
   vim.cmd('new')
   local bufnr = vim.api.nvim_get_current_buf()
-  vim.api.nvim_buf_set_name(bufnr, 'zsnip://snippets')
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  -- Set before naming or writing the buffer, so a failed set_lines -- an
+  -- unforeseen newline surviving one_line() -- still leaves a buffer the
+  -- guard above recognises and cleans up on the next :ZSnip list, rather
+  -- than a same-named orphan with buftype == '' that E95s forever after.
   vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
   vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = bufnr })
+  vim.api.nvim_buf_set_name(bufnr, 'zsnip://snippets')
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
 end
 

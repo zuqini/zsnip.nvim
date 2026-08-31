@@ -1,10 +1,11 @@
 ---Driving a real Neovim through real keystrokes, from the test suite.
 ---
----Insert-mode completion cannot be exercised in-process. `nvim -l` has no main
----loop, so `nvim_feedkeys(..., 'n')` queues keys nothing ever reads; and the
----'x' flag runs them in a nested exec, where textlock forbids the |complete()|
----call that is the whole point. A child Neovim started with `-c` has a main
----loop, which is the only place the completion menu is real.
+---`nvim -l` has no main loop, so `nvim_feedkeys(..., 'n')` queues keys nothing
+---ever reads, and the 'x' flag runs them in a nested exec where textlock
+---forbids a direct |complete()| call. A single menu can still be driven
+---in-process through the expression register (`in_insert()` in
+---complete_test.lua); what needs a child Neovim started with `-c` is the main
+---loop itself -- 'autocomplete' timers, a menu that lives across turns.
 ---
 ---The child runs a fragment that calls `emit(key, value)` and then `done()`.
 ---Whatever it emitted comes back here as a table.

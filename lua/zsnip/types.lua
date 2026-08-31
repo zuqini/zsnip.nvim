@@ -12,7 +12,7 @@
 ---@field prefix string Trigger typed by the user
 ---@field body string|fun(): string?
 ---@field description? string
----@field filetype? string Filetype the snippet was registered under; set by the registry
+---@field filetype? string Filetype the snippet was registered under; set by the registry -- its presence also means the body was normalised on the way in
 
 ---@alias zsnip.LoaderKind "vscode" | "snipmate"
 
@@ -22,19 +22,38 @@
 ---@field include? string[] Only load these languages
 ---@field exclude? string[] Load every language except these
 
+---What `registry.enable()` normalizes a `zsnip.LoaderOpts` into and
+---`registry.loader()` hands back: `paths` is always a normalised list by the
+---time it is stored, which is what lets every reader -- `health.lua`, the
+---scanners -- use it as-is, with no `ipairs()` check and no re-normalizing.
+---@class zsnip.Loader
+---@field paths string[] Directories read in addition to the runtimepath, always a normalised list
+---@field include? string[] Only load these languages
+---@field exclude? string[] Load every language except these
+
 ---@class zsnip.Config
 ---@field extend? table<string, string|string[]> Filetype inheritance, e.g. `{ typescriptreact = { 'typescript' } }`
 ---@field global_filetype? string|false Bucket every filetype inherits from (default `'all'`)
----@field max_items? integer Default cap for |zsnip.completion_items()| and `zsnip.complete` (default 100)
----@field documentation? boolean Attach the snippet body as item documentation (default true)
+---@field max_items? number Default cap for |zsnip.completion_items()| and `zsnip.complete` (default 100)
+---@field documentation? boolean Attach the body and description as item documentation (default true)
 ---@field command? boolean Create the `:ZSnip` user command (default true)
+
+---What `config.setup()` resolves a `zsnip.Config` into: every field `M.options`
+---carries, always present -- mirrors how `zsnip.LoaderOpts` resolves into
+---`zsnip.Loader`.
+---@class zsnip.ResolvedConfig
+---@field extend table<string, string|string[]>
+---@field global_filetype string|false
+---@field max_items number
+---@field documentation boolean
+---@field command boolean
 
 ---@class zsnip.CompletionOpts
 ---@field prefix? string Keyword to fuzzy-match triggers against; unset returns everything
 ---@field filetype? string Defaults to the filetype of `bufnr`
 ---@field bufnr? integer Defaults to the current buffer
 ---@field position? lsp.Position Cursor the response is anchored to; defaults to the real one when `bufnr` is the current buffer
----@field limit? integer Overrides `max_items`
+---@field limit? number Overrides `max_items`
 ---@field documentation? boolean Overrides the configured default
 ---@field filter? fun(snippet: zsnip.Snippet): boolean Keep only the snippets this returns true for
 
@@ -51,7 +70,7 @@
 ---own engine needs. The names match `zsnip.CompletionOpts` so they pass
 ---straight through.
 ---@class zsnip.SourceOpts
----@field limit? integer Cap on items per response. The three LSP-shaped sources default to uncapped -- the engine filters; `zsnip.complete` matches for itself, so it defaults to `max_items`
+---@field limit? number Cap on items per response. The three LSP-shaped sources default to uncapped -- the engine filters; `zsnip.complete` matches for itself, so it defaults to `max_items`
 ---@field documentation? boolean Attach the body and description to the item
 ---@field filter? fun(snippet: zsnip.Snippet): boolean Keep only the snippets this returns true for
 
@@ -59,5 +78,6 @@
 ---@class zsnip.Source
 ---@field kind zsnip.LoaderKind
 ---@field path string
+---@field scope? string vscode only: the pack's own name for what this record was filed under, when the file's own `scope` decides who it serves -- a `.code-snippets` entry. Nil for a manifest- or filename-derived source, which must not be filtered by `scope` -- see docs/api.md.
 
 return {}

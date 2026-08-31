@@ -8,6 +8,10 @@
 ---own shape from `matches()` and `document()` instead: it is not handing an
 ---item to anyone, but its preview must read like everyone else's.
 ---
+---Underneath both layers sit the rules every source shares, which is why
+---`zsnip.complete` uses `matches()` and those shared rules directly rather
+---than through `items()`.
+---
 ---The bodies are already LSP snippet syntax, so `insertTextFormat` is all a
 ---client needs to expand them -- there is nothing to translate.
 
@@ -36,35 +40,69 @@ function M.run_start(line, col)
   return start and start - 1 or col
 end
 
----How much of `run` the trigger cannot account for.
----
----A trigger can be the whole run (`console.log`, `<div`) or only its tail:
----`req` typed as `(req` is the run, but the `(` belongs to the buffer. That
----prefix has to survive, so it is reported here and put back by whoever builds
----the replacement. Case-insensitive, because the menu matches that way too --
----`(REQ` still finds `req`, and the `(` is still not the snippet's.
----
----Nothing left over means the run and the trigger are unrelated (`x` against
----`req`); the answer is then '' and the client's own filter drops the item.
+local KEYWORD = '[%w_\128-\255]'
+M.KEYWORD = KEYWORD
+
+---Byte where the part of `run` the trigger accounts for begins -- longest
+---first -- and whether it starts the trigger outright (`(req` against `req`)
+---or only fuzzy-matches it (`c.log` against `console.log`); nil when no
+---legal start does either. Case-insensitive, because the menu matches that
+---way too. A keyword trigger has to start a word, the rule `init.match()`
+---applies to expansion, so a split inside one is skipped.
 ---@param run string
 ---@param trigger string
----@return string
-function M.unmatched(run, trigger)
+---@return integer? start
+---@return boolean matched
+local function trigger_start(run, trigger)
+  local word_trigger = trigger:match('^' .. KEYWORD) ~= nil
   for start = math.max(1, #run - #trigger + 1), #run do
-    local typed = run:sub(start)
-    if trigger:sub(1, #typed):lower() == typed:lower() then
-      return run:sub(1, start - 1)
+    -- A byte >= 0x80 is always part of a multi-byte character, never a
+    -- boundary -- see the same caveat on `init.match()`.
+    local before = run:sub(start - 1, start - 1)
+    if not (word_trigger and before:match(KEYWORD)) then
+      local typed = run:sub(start)
+      if trigger:sub(1, #typed):lower() == typed:lower() then
+        return start, true
+      end
+      -- A Vimscript call, so only at a legal start the cheap test rejected.
+      if #vim.fn.matchfuzzy({ trigger }, typed) > 0 then
+        return start, false
+      end
     end
   end
-  return ''
+  return nil, false
 end
 
----What `zsnip.blink`, `zsnip.cmp` and `zsnip.lsp` forward, in one place so that
----a new `zsnip.SourceOpts` field does not have to be re-plumbed through all
----three. The uncapped default belongs to them alone, because an engine that
----filters and ranks the response wants the whole filetype. `max_items` is for
----hand-rolled callers and for `zsnip.complete`, which does not come through
----here: it matches for itself, and nothing downstream trims what it returns.
+---How much of `run` a trigger's replacement has to put back, and whether some
+---legal start of `run` actually matched the trigger.
+---
+---Three cases. A suffix of `run` starts the trigger (`req` typed as `(req`):
+---the rest is `head`, `matched` true. A legal suffix only fuzzy-matches it
+---instead (`c.log` against `console.log`, consumed whole -- `head` is ''):
+---`matched` false. Otherwise the run's trailing keyword is what got typed and
+---the rest is `head` (`x` against `req` answers ''), `matched` false. `head`
+---always goes back into `insertText`/`newText`; `matched` is why it only goes
+---into `filterText` when it really was the trigger's -- see `items()`.
+---@param run string
+---@param trigger string
+---@return string head
+---@return boolean matched
+function M.unmatched(run, trigger)
+  local start, matched = trigger_start(run, trigger)
+  if start then
+    return run:sub(1, start - 1), matched
+  end
+  return run:match('^(.-)' .. KEYWORD .. '*$'), false
+end
+
+---What `zsnip.blink`, `zsnip.cmp`, `zsnip.lsp` and `zsnip.complete` forward,
+---in one place so that a new `zsnip.SourceOpts` field does not have to be
+---re-plumbed through all four. The uncapped default belongs to the three
+---LSP-shaped ones alone, because an engine that filters and ranks the
+---response wants the whole filetype; `zsnip.complete` comes through here too,
+---then puts its own `limit` -- capped by `max_items` unless the caller set one
+---itself -- back on top, since it matches for itself and nothing downstream
+---trims what it returns.
 ---@param opts zsnip.SourceOpts
 ---@param bufnr? integer
 ---@param position? lsp.Position
@@ -79,17 +117,31 @@ function M.source_opts(opts, bufnr, position)
   }
 end
 
+---`opts.bufnr` resolved the way `nvim_buf_*` calls treat it: nil and the
+---conventional 0 both mean the current buffer, so a hand-rolled source
+---passing 0 does not lose the `textEdit` anchor `cursor_in()` needs a real
+---bufnr for.
+---@param opts zsnip.CompletionOpts
+---@return integer bufnr
+---@return string filetype
+local function resolve_buffer(opts)
+  local bufnr = opts.bufnr
+  if bufnr == nil or bufnr == 0 then
+    bufnr = vim.api.nvim_get_current_buf()
+  end
+  return bufnr, opts.filetype or vim.bo[bufnr].filetype
+end
+
 ---@param opts? zsnip.CompletionOpts
 ---@return zsnip.Match[] matches
 ---@return boolean documented Whether the caller asked for bodies and descriptions
 function M.matches(opts)
   opts = opts or {}
-  local bufnr = opts.bufnr or vim.api.nvim_get_current_buf()
-  local filetype = opts.filetype or vim.bo[bufnr].filetype
+  local _, filetype = resolve_buffer(opts)
   local limit = opts.limit or config.options.max_items
   local documented = opts.documentation
   if documented == nil then
-    documented = config.options.documentation ~= false
+    documented = config.options.documentation
   end
 
   -- First prefix wins: the registry orders a filetype's own snippets ahead of
@@ -105,11 +157,16 @@ function M.matches(opts)
     end
   end
 
+  -- matchfuzzy rejects a fractional or non-finite limit, and a negative one
+  -- is nonsense; math.huge, the spelling every uncapped caller passes, is
+  -- already its own floor and survives this untouched.
+  limit = math.max(0, math.floor(limit))
+
   local ranked = opts.prefix ~= nil and opts.prefix ~= ''
   if ranked then
-    -- matchfuzzy rejects a non-finite limit, and `math.huge` is what every
-    -- caller that wants no cap passes. Omitting the argument is not the same
-    -- as passing nil, which reaches Vimscript as v:null and raises E1206.
+    -- `math.huge` is what every caller that wants no cap passes. Omitting
+    -- the argument is not the same as passing nil, which reaches Vimscript
+    -- as v:null and raises E1206.
     if limit == math.huge then
       triggers = vim.fn.matchfuzzy(triggers, opts.prefix)
     else
@@ -201,6 +258,19 @@ local function replacement(opts, bufnr)
   }
 end
 
+---A description may contain a newline, whatever produced it -- a vscode
+---array-form description joined with `\n`, or a body handed to
+---`add_snippets()` straight from a user's config. A one-line row -- a
+---completion menu row, `:ZSnip list`'s buffer, its picker's row -- must not.
+---Never raises: a description that is not even a string (a config typo) is
+---stringified first, the same tolerance a bare `%s` format used to give it.
+---@param description unknown
+---@return string
+function M.one_line(description)
+  local flattened = tostring(description):gsub('%s*\n%s*', ' ')
+  return flattened
+end
+
 ---The one preview text every route shows: the description, then the body
 ---fenced for the filetype. `zsnip.complete` renders the same string, so a
 ---snippet reads byte-identically whichever source served it.
@@ -222,7 +292,9 @@ function M.document(snippet, text, filetype)
   local fenced = ('%s%s\n%s\n%s'):format(fence, filetype, text, fence)
   local description = snippet.description
   if description and description ~= '' then
-    return description .. '\n\n' .. fenced
+    -- A non-string description (a config typo, or a malformed pack entry)
+    -- must not raise out of a completion response the way a bare `..` would.
+    return tostring(description) .. '\n\n' .. fenced
   end
   return fenced
 end
@@ -230,29 +302,32 @@ end
 ---@param snippet zsnip.Snippet
 ---@param text string
 ---@param filetype string
+---@param documented boolean
 ---@return lsp.CompletionItem
-local function item(snippet, text, filetype)
-  return {
+local function item(snippet, text, filetype, documented)
+  local entry = {
     label = snippet.prefix,
     kind = Kind.Snippet,
-    -- The description rides in `documentation`, not `detail`: clients fence
-    -- `detail` as code in the buffer's filetype -- vim.lsp.completion
-    -- included -- and the description is prose.
-    documentation = {
-      kind = 'markdown',
-      value = M.document(snippet, text, filetype),
-    },
     insertText = text,
     insertTextFormat = Format.Snippet,
   }
+  if documented then
+    -- The description rides in `documentation`, not `detail`: clients fence
+    -- `detail` as code in the buffer's filetype -- vim.lsp.completion
+    -- included -- and the description is prose.
+    entry.documentation = {
+      kind = 'markdown',
+      value = M.document(snippet, text, filetype),
+    }
+  end
+  return entry
 end
 
 ---@param opts? zsnip.CompletionOpts
 ---@return lsp.CompletionItem[]
 function M.items(opts)
   opts = opts or {}
-  local bufnr = opts.bufnr or vim.api.nvim_get_current_buf()
-  local filetype = opts.filetype or vim.bo[bufnr].filetype
+  local bufnr, filetype = resolve_buffer(opts)
   local matched, documented = M.matches(opts)
 
   -- Without a textEdit the client picks the replaced span itself, and every
@@ -264,21 +339,21 @@ function M.items(opts)
 
   local items = {}
   for index, match in ipairs(matched) do
-    local entry = item(match.snippet, match.text, filetype)
-    if not documented then
-      entry.documentation = nil
-    end
+    local entry = item(match.snippet, match.text, filetype, documented)
     if edit then
       -- The part of the run that is not the trigger's is buffer text inside
       -- the replaced span, so it has to be put back -- and put back as text,
-      -- not as snippet syntax.
-      local keep = M.unmatched(edit.run, match.snippet.prefix)
+      -- not as snippet syntax -- whether or not it was ever the trigger's.
+      local keep, tail_matched = M.unmatched(edit.run, match.snippet.prefix)
       -- `insertText` is kept in step with `newText` rather than left as the
       -- bare body: a client reads one or the other, never both, and the two
       -- disagreeing is how the `(` ends up in the buffer twice.
       entry.insertText = body.literal(keep) .. match.text
       entry.textEdit = { range = edit.range, newText = entry.insertText }
-      entry.filterText = keep .. match.snippet.prefix
+      -- `keep` only belongs in filterText when it came from the trigger's own
+      -- run: for an unrelated run (bare `(`) leaving it out is what keeps a
+      -- client that filters by prefix alone from offering every snippet.
+      entry.filterText = tail_matched and (keep .. match.snippet.prefix) or match.snippet.prefix
     end
     -- Only when zsnip did the ranking. Unranked, the order is the order the
     -- packs happened to be read in, and pinning the client to that is what

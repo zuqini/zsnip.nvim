@@ -33,6 +33,8 @@ luassert:register('assertion', 'contains', table_contains,
 local tempdirs = {}
 ---@type string?
 local saved_rtp = nil
+---@type table<string, any>
+local saved_options = {}
 
 ---@return string
 function M.tempdir()
@@ -133,6 +135,18 @@ function M.use_rtp(...)
   vim.o.runtimepath = table.concat({ ... }, ',') .. ',' .. vim.o.runtimepath
 end
 
+---Set a global option for the duration of a test, restoring it in cleanup().
+---Only the first call for a given `name` records the original value -- a
+---nil check, not `or`, since that original can itself be '' or false.
+---@param name string
+---@param value any
+function M.set_option(name, value)
+  if saved_options[name] == nil then
+    saved_options[name] = vim.o[name]
+  end
+  vim.o[name] = value
+end
+
 ---Stub the '+' register for the duration of a test. Stubbed rather than
 ---written to: a headless CI runner has no clipboard provider, so '+' reads
 ---back empty there. `reads.count` is how often it was asked -- the number a
@@ -173,9 +187,8 @@ end
 ---Stop every zsnip client, leaving the autocmd that starts them in place --
 ---the state a `:LspStop` leaves behind.
 ---
----Waiting for the client to actually go is the point: vim.lsp.start() reuses a
----client by name, so a still-stopping one from an earlier test is handed back
----to the next and never attaches to anything.
+---Waiting for the client to actually go is the point: it keeps a still-
+---stopping client from this test outliving it into the next one.
 function M.stop_lsp_clients()
   for _, client in ipairs(vim.lsp.get_clients()) do
     if vim.startswith(client.name, 'zsnip') then
@@ -197,13 +210,19 @@ function M.stop_lsp()
   M.stop_lsp_clients()
 end
 
----Undo runtimepath changes and delete every temp directory; call from
----after_each so a failing assertion cannot leak state into the next test.
+---Stop any snippet session, undo runtimepath changes and delete every temp
+---directory; call from after_each so a failing assertion cannot leak state
+---into the next test.
 function M.cleanup()
+  vim.snippet.stop()
   if saved_rtp then
     vim.o.runtimepath = saved_rtp
     saved_rtp = nil
   end
+  for name, value in pairs(saved_options) do
+    vim.o[name] = value
+  end
+  saved_options = {}
   for _, dir in ipairs(tempdirs) do
     vim.fn.delete(dir, 'rf')
   end
@@ -244,10 +263,25 @@ function M.typed(filetype, line)
   local bufnr = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(bufnr)
   vim.bo[bufnr].filetype = filetype
-  vim.o.virtualedit = 'onemore'
+  M.set_option('virtualedit', 'onemore')
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { line or '' })
   vim.api.nvim_win_set_cursor(0, { 1, #(line or '') })
   return bufnr
+end
+
+---Run `fn`, capturing every `vim.notify()` call it makes instead of letting
+---it reach the real one.
+---@param fn fun()
+---@return string[] messages
+function M.notifications(fn)
+  local notify, messages = vim.notify, {}
+  vim.notify = function(message)
+    messages[#messages + 1] = message
+  end
+  local ok, err = pcall(fn)
+  vim.notify = notify
+  assert(ok, err)
+  return messages
 end
 
 ---@param snippets zsnip.Snippet[]

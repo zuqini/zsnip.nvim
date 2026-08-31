@@ -12,6 +12,14 @@ describe('body.resolve', function()
     assert.are.equal('$C$', body.resolve('$C$'))
   end)
 
+  -- The grammar reads one variable, CURRENT_YEARabc, not $CURRENT_YEAR
+  -- followed by literal text -- a bare $NAME has to read the same way, or an
+  -- unknown suffix like this resolves to '2026abc'.
+  it('reads a whole word as the variable name, not its uppercase prefix', function()
+    assert.are.equal('$CURRENT_YEARabc', body.resolve('$CURRENT_YEARabc'))
+    assert.are.equal(os.date('%Y') .. '!', body.resolve('$CURRENT_YEAR!'))
+  end)
+
   it('leaves escaped variables alone', function()
     assert.are.equal('\\${CURRENT_YEAR}', body.resolve('\\${CURRENT_YEAR}'))
   end)
@@ -62,12 +70,28 @@ describe('body.resolve', function()
     assert.is_truthy(body.resolve('$RANDOM_HEX'):match('^%x%x%x%x%x%x$'))
   end)
 
+  -- os.date('%z') gives '+0100'; VSCode's variable is '+01:00'.
+  it('colons the timezone offset the way VSCode does', function()
+    assert.is_truthy(body.resolve('$CURRENT_TIMEZONE_OFFSET'):match('^[%+%-]%d%d:%d%d$'))
+  end)
+
   it('escapes snippet syntax coming out of a variable', function()
     local _, restore = helpers.stub_clipboard('a $1 }')
     local resolved = body.resolve('$CLIPBOARD')
     restore()
 
     assert.are.equal('a \\$1 \\}', resolved)
+  end)
+
+  -- getreg's list form only splits on '\n', so a Windows copy leaves '\r' at
+  -- the end of every line -- the same '^M' bug a raw pack body has, reachable
+  -- through a resolved variable instead.
+  it('normalizes CRLF line endings out of a clipboard value', function()
+    local _, restore = helpers.stub_clipboard('line1\r\nline2\r')
+    local resolved = body.resolve('$CLIPBOARD')
+    restore()
+
+    assert.are.equal('line1\nline2\n', resolved)
   end)
 
   -- It is the parity of the backslash run that decides, not its presence: two
@@ -88,12 +112,18 @@ describe('body.resolve', function()
 
     vim.bo.commentstring = '-- %s'
     assert.are.equal('--', body.resolve('$LINE_COMMENT'))
-    -- A line-comment buffer has no honest answer for a block comment.
-    assert.are.equal('$BLOCK_COMMENT_START', body.resolve('$BLOCK_COMMENT_START'))
+    -- A line-comment buffer has no honest answer for a block comment: ''
+    -- rather than leaving it unresolved, which vim.snippet.expand() would
+    -- otherwise turn into a tabstop holding the literal variable name.
+    assert.are.equal('', body.resolve('$BLOCK_COMMENT_START'))
 
     vim.bo.commentstring = '/* %s */'
     assert.are.equal('/*', body.resolve('$BLOCK_COMMENT_START'))
     assert.are.equal('*/', body.resolve('$BLOCK_COMMENT_END'))
+
+    -- No 'commentstring' at all is the same "no honest answer" as above.
+    vim.bo.commentstring = ''
+    assert.are.equal('', body.resolve('$LINE_COMMENT'))
 
     vim.bo.commentstring = saved
   end)
@@ -152,6 +182,13 @@ describe('body.editable_final_tabstop', function()
     assert.are.equal('${3/x/y/} ${4:b}', body.editable_final_tabstop('${3/x/y/} ${0:b}'))
   end)
 
+  -- ${0|a,b|} is still a placeholder on the exit point, and the choice was
+  -- being dropped silently: the '${0:' search that gated the whole function
+  -- never matched it.
+  it('renumbers a choice on the exit point too', function()
+    assert.are.equal('${1:a} ${2|x,y|}', body.editable_final_tabstop('${1:a} ${0|x,y|}'))
+  end)
+
   it('leaves a bare $0 alone', function()
     assert.are.equal('${1:a}$0', body.editable_final_tabstop('${1:a}$0'))
   end)
@@ -171,13 +208,13 @@ describe('body.editable_final_tabstop', function()
   end)
 end)
 
-describe('body.expandable', function()
+describe('body.accepted', function()
   it('accepts what the grammar parses', function()
-    assert.is_true(body.expandable('local ${1:x} = $0'))
+    assert.is_true(body.accepted('local ${1:x} = $0'))
   end)
 
   it('rejects what it does not', function()
-    assert.is_false(body.expandable('${1:'))
+    assert.is_false(body.accepted('${1:'))
   end)
 end)
 
@@ -199,33 +236,45 @@ describe('body.text', function()
     local text = body.text({ prefix = 'x', body = function() return '${0:y} $CURRENT_YEAR' end })
     assert.are.equal('${1:y} ' .. os.date('%Y'), text)
   end)
+
+  -- vim.snippet.expand() raises on '' the same way it raises on a body that
+  -- was empty to begin with, so a body left with nothing after resolution is
+  -- as unusable as one normalize() already rejects at load time.
+  it('drops a body that resolves to nothing', function()
+    local saved = vim.bo.commentstring
+    vim.bo.commentstring = '-- %s'
+
+    assert.is_nil(body.text({ prefix = 'x', body = '$BLOCK_COMMENT_START' }))
+
+    vim.bo.commentstring = saved
+  end)
 end)
 
-describe('body.expandable', function()
+describe('body.accepted against the real vim.snippet.expand', function()
   -- Parsing is not the whole test. vim.snippet.expand() asserts on these two
   -- *after* the grammar has accepted them -- and by then the completion engine
   -- has already deleted the typed word, so the raise takes the word with it.
   it('rejects a body with a second exit point', function()
-    assert.is_false(body.expandable('print($0) --[[$0]]'))
-    assert.is_false(body.expandable('${0:a} $0'))
+    assert.is_false(body.accepted('print($0) --[[$0]]'))
+    assert.is_false(body.accepted('${0:a} $0'))
   end)
 
   it('rejects placeholders that disagree about a tabstop', function()
-    assert.is_false(body.expandable('${1:foo} ${1:bar}'))
+    assert.is_false(body.accepted('${1:foo} ${1:bar}'))
   end)
 
   it('keeps the shapes that only look like those', function()
-    assert.is_true(body.expandable('${1:foo} ${1:foo}'))
-    assert.is_true(body.expandable('${1:foo} $1'))
-    assert.is_true(body.expandable('print($0)'))
-    assert.is_true(body.expandable('${1|a,b|}'))
+    assert.is_true(body.accepted('${1:foo} ${1:foo}'))
+    assert.is_true(body.accepted('${1:foo} $1'))
+    assert.is_true(body.accepted('print($0)'))
+    assert.is_true(body.accepted('${1|a,b|}'))
   end)
 
   it('still rejects what the grammar cannot parse', function()
-    assert.is_false(body.expandable('${'))
+    assert.is_false(body.accepted('${'))
   end)
 
-  -- Anything expandable() lets through has to survive the real thing.
+  -- Anything accepted() lets through has to survive the real thing.
   --
   -- No choice body here: expanding one schedules the |complete()| that opens
   -- its menu, and a headless runner is not in insert mode by the time that
@@ -243,7 +292,24 @@ describe('body.expandable', function()
       vim.api.nvim_win_set_cursor(0, { 1, 0 })
       local ok = pcall(vim.snippet.expand, body.resolve(candidate))
       vim.snippet.stop()
-      assert.are.equal(body.expandable(candidate), ok, candidate)
+      assert.are.equal(body.accepted(candidate), ok, candidate)
+    end
+  end)
+
+  -- well_formed() mirrors two asserts private to vim.snippet.expand() itself,
+  -- so it has nothing to check itself against but the real thing. This pins
+  -- expand() raising on both shapes: if core ever relaxes either, this test
+  -- -- not well_formed() -- is what notices, on nightly, before a body that
+  -- would now expand keeps getting dropped.
+  it('still expects core to raise on the shapes well_formed() rejects', function()
+    local bufnr = helpers.typed('lua')
+    for _, candidate in ipairs({ '$0 $0', '${1:a} ${1:b}' }) do
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { '' })
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      local ok = pcall(vim.snippet.expand, candidate)
+      vim.snippet.stop()
+      assert.is_false(ok, candidate)
+      assert.is_false(body.accepted(candidate), candidate)
     end
   end)
 end)
@@ -256,6 +322,50 @@ describe('body.normalize', function()
   it('drops a body expand() would raise on', function()
     assert.is_nil(body.normalize('$0$0'))
     assert.is_nil(body.normalize('${'))
+  end)
+
+  -- vim.snippet.expand() splits on '\n' only, so a body carrying a pack's
+  -- CRLF (or classic-Mac CR) escapes would otherwise land in the buffer with
+  -- a literal '^M' at the end of every line.
+  it('turns CRLF line endings into plain newlines', function()
+    assert.are.equal('a\nb\nc', body.normalize('a\r\nb\r\nc'))
+  end)
+
+  it('turns a lone CR into a newline', function()
+    assert.are.equal('a\nb\nc', body.normalize('a\rb\rc'))
+  end)
+
+  it('leaves a body with no CR byte-identical', function()
+    local text = 'class ${1:Foo}:\n    pass'
+    assert.are.equal(text, body.normalize(text))
+  end)
+
+  it('leaves a literal backslash-r escape alone', function()
+    assert.are.equal('a\\rb', body.normalize('a\\rb'))
+  end)
+
+  it('collapses a body that is only CRLF to a single newline', function()
+    assert.are.equal('\n', body.normalize('\r\n'))
+  end)
+
+  it('still renumbers $0 after collapsing CRLF', function()
+    assert.are.equal('a\n${1:x}', body.normalize('a\r\n${0:x}'))
+  end)
+
+  it('normalizes a CRLF body the same way vim.snippet.expand() would insert it', function()
+    local bufnr = helpers.typed('django')
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { '' })
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+    local raw = '\r\nclass ${1:MODEL_NAME}CreateView(CreateView):\r\n    model = '
+    local normalized = body.normalize(raw)
+    assert.is_not_nil(normalized)
+    vim.snippet.expand(body.resolve(normalized))
+
+    for _, line in ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)) do
+      assert.is_nil(line:find('\r', 1, true), line)
+    end
+    vim.snippet.stop()
   end)
 end)
 

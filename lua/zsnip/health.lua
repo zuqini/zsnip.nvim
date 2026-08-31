@@ -16,6 +16,15 @@ local MINIMAL_CONFIG = table.concat({
   "require('zsnip.loaders.from_snipmate').lazy_load()",
 }, '\n')
 
+---:checkhealth runs every check from inside its own freshly created,
+---filetype-less buffer, so the buffer the user actually had open is the
+---alternate one.
+---@return integer?
+local function came_from()
+  local altbuf = vim.fn.bufnr('#')
+  return altbuf ~= -1 and vim.api.nvim_buf_is_valid(altbuf) and altbuf or nil
+end
+
 local function check_environment()
   vim.health.start('Environment')
 
@@ -33,7 +42,7 @@ local function check_environment()
     vim.health.error('vim.snippet is not available — zsnip is a layer over it')
   end
 
-  if pcall(require, 'vim.lsp._snippet_grammar') then
+  if require('zsnip.body').validates then
     vim.health.ok('snippet grammar is available (unparseable bodies are dropped on load)')
   else
     vim.health.warn('vim.lsp._snippet_grammar is missing — bodies cannot be validated on load', {
@@ -46,7 +55,7 @@ local function check_loaders()
   vim.health.start('Loaders')
 
   local enabled = {}
-  for _, kind in ipairs({ 'vscode', 'snipmate' }) do
+  for _, kind in ipairs(registry.kinds()) do
     local opts = registry.loader(kind)
     if opts then
       enabled[#enabled + 1] = { kind = kind, opts = opts }
@@ -65,12 +74,11 @@ local function check_loaders()
     vim.health.ok('loader: ' .. loader.kind)
     -- A path that does not exist finds nothing and says nothing, and a typo in
     -- one looks exactly like the loader not working.
-    for _, path in ipairs(loader.opts.paths or {}) do
-      local expanded = vim.fs.normalize(path)
-      if vim.fn.isdirectory(expanded) == 1 then
-        vim.health.info(('  path: %s'):format(expanded))
+    for _, path in ipairs(loader.opts.paths) do
+      if vim.fn.isdirectory(path) == 1 then
+        vim.health.info(('  path: %s'):format(path))
       else
-        vim.health.warn(('  path does not exist: %s'):format(expanded))
+        vim.health.warn(('  path does not exist: %s'):format(path))
       end
     end
   end
@@ -86,23 +94,37 @@ local function check_snippets()
     total = total + #snippets
   end
 
+  -- The other half of "my snippet is missing": it was found and then dropped.
+  -- Read after available(), which is what forces parse() to fill
+  -- dropped_parsed -- read any earlier and every file-derived drop counts as
+  -- 0, and a total of 0 gets blamed on the runtimepath instead.
+  local dropped = registry.dropped()
+
   if total == 0 then
-    vim.health.warn('No snippets found', {
-      'Check that a snippet package is installed and on the runtimepath,',
-      'e.g. rafamadriz/friendly-snippets, and that its loader is registered.',
-    })
+    if dropped > 0 then
+      vim.health.warn(('%d body/bodies found and dropped, 0 kept'):format(dropped), {
+        'vim.snippet.expand() would not take them. Check the bodies themselves,',
+        'not the runtimepath.',
+      })
+    else
+      vim.health.warn('No snippets found', {
+        'Check that a snippet package is installed and on the runtimepath,',
+        'e.g. rafamadriz/friendly-snippets, and that its loader is registered.',
+      })
+    end
     return
   end
 
   vim.health.ok(('%d snippet(s) across %d filetype(s)'):format(total, filetypes))
 
-  local filetype = vim.bo.filetype
+  local altbuf = came_from()
+  local filetype = altbuf and vim.bo[altbuf].filetype or ''
   if filetype ~= '' then
-    vim.health.info(('current filetype (%s): %d snippet(s)'):format(filetype, #registry.get(filetype)))
+    vim.health.info(
+      ('filetype of the buffer you came from (%s): %d snippet(s)'):format(filetype, #registry.get(filetype))
+    )
   end
 
-  -- The other half of "my snippet is missing": it was found and then dropped.
-  local dropped = registry.dropped()
   if dropped > 0 then
     vim.health.info(('%d body/bodies dropped — vim.snippet.expand() will not take them'):format(dropped))
   end
@@ -123,7 +145,7 @@ local function check_sources()
   if lsp.started() and lsp.running() then
     serving[#serving + 1] = 'the in-process LSP server'
   end
-  if require('zsnip.complete').enabled() then
+  if require('zsnip.complete').enabled(came_from()) then
     serving[#serving + 1] = "zsnip.complete, through 'complete'"
   end
 

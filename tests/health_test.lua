@@ -79,12 +79,53 @@ describe(':checkhealth zsnip', function()
     assert.is_true(mentions(check().warn, 'No snippets found'))
   end)
 
+  it('names dropped bodies instead of blaming the runtimepath when everything added was rejected', function()
+    registry.add('lua', { { prefix = 'tr', body = '${1/(.*)/$1/}' } })
+    local report = check()
+    assert.is_true(mentions(report.warn, '1 body/bodies found and dropped'))
+    assert.is_false(mentions(report.warn, 'No snippets found'))
+  end)
+
+  -- The registry.add() case above bumps dropped_added at add time, with no
+  -- ordering dependency on available(). This is the path that actually
+  -- regressed: dropped_parsed is only filled inside parse(), which
+  -- available() is what forces.
+  it('names dropped bodies for a pack discovered through the runtimepath too', function()
+    local dir = helpers.vscode_pack({ lua = { tr = { prefix = 'tr', body = '${1/(.*)/$1/}' } } })
+    helpers.use_rtp(dir)
+    require('zsnip.loaders.from_vscode').lazy_load()
+
+    local report = check()
+    assert.is_true(mentions(report.warn, '1 body/bodies found and dropped'))
+    assert.is_false(mentions(report.warn, 'No snippets found'))
+  end)
+
   it('counts what was found', function()
     registry.add('lua', { { prefix = 'a', body = 'b' }, { prefix = 'c', body = 'b' } })
     assert.is_true(mentions(check().ok, '2 snippet%(s%) across 1 filetype%(s%)'))
   end)
 
-  -- Which of the three mutually exclusive delivery paths is running is the
+  -- :checkhealth runs every check from inside its own freshly created,
+  -- filetype-less buffer, so vim.bo.filetype is always '' by the time
+  -- health.check() runs -- the alternate buffer is the one the user actually
+  -- had open before running :checkhealth.
+  it('reports the filetype of the buffer the user came from, not the scratch one checkhealth runs in', function()
+    registry.add('lua', { { prefix = 'a', body = 'b' } })
+    local origin = vim.api.nvim_create_buf(false, true)
+    vim.bo[origin].filetype = 'lua'
+    vim.api.nvim_set_current_buf(origin)
+
+    local scratch = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_set_current_buf(scratch)
+    assert.are.equal('', vim.bo[scratch].filetype)
+
+    assert.is_true(mentions(check().info, 'buffer you came from %(lua%): 1 snippet%(s%)'))
+
+    vim.api.nvim_buf_delete(scratch, { force = true })
+    vim.api.nvim_buf_delete(origin, { force = true })
+  end)
+
+  -- Which of the four mutually exclusive delivery paths is running is the
   -- other half of "why do I see no snippets", and nothing else reports it.
   it('says whether the LSP server is serving them', function()
     assert.is_true(mentions(check().info, 'No source detected'))

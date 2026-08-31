@@ -17,18 +17,7 @@ after_each(function()
   helpers.cleanup()
 end)
 
----@return string[]
-local function notifications(run)
-  local notify = vim.notify
-  local messages = {}
-  vim.notify = function(message)
-    messages[#messages + 1] = message
-  end
-  local ok, err = pcall(run)
-  vim.notify = notify
-  assert(ok, err)
-  return messages
-end
+local notifications = helpers.notifications
 
 describe(':ZSnip', function()
   it('filters completions by what has been typed', function()
@@ -89,7 +78,28 @@ describe(':ZSnip', function()
     assert.are.equal('req', formatted)
     assert.is_true(vim.snippet.active())
     assert.are.equal('local m = require', vim.api.nvim_get_current_line())
-    vim.snippet.stop()
+  end)
+
+  -- Before the description was flattened, nvim_buf_set_lines raised on a
+  -- multi-line one, and it raised *after* nvim_buf_set_name -- leaving a
+  -- same-named buffer with buftype == '' that the reuse guard never
+  -- recognised, so E95 followed forever after.
+  it('lists twice in a row, even across a run with a multi-line description', function()
+    registry.add('lua', { { prefix = 'req', body = 'b', description = 'a\nb' } })
+    vim.cmd('enew')
+    vim.bo.filetype = 'lua'
+
+    assert.has_no.errors(function()
+      vim.cmd('ZSnip list')
+    end)
+    assert.has_no.errors(function()
+      vim.cmd('ZSnip list')
+    end)
+
+    local named = vim.tbl_filter(function(bufnr)
+      return vim.api.nvim_buf_get_name(bufnr):match('zsnip://snippets$') ~= nil
+    end, vim.api.nvim_list_bufs())
+    assert.are.equal(1, #named)
   end)
 
   it('lists what the filetype has, with where each entry came from', function()

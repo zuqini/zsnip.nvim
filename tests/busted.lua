@@ -9,7 +9,7 @@
 -- avoids the hang seen when busted re-execs through an external interpreter.
 --
 -- Usage (from the repo root):
---   nvim -l tests/busted.lua
+--   nvim -u NONE -l tests/busted.lua
 
 local root = vim.fn.getcwd()
 local rocks = root .. '/.luarocks/share/lua/5.1'

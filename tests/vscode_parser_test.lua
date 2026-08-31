@@ -63,6 +63,48 @@ describe('vscode.parse', function()
     }))
     assert.are.same({ 'a', 'm', 'z' }, helpers.prefixes(snippets))
   end)
+
+  -- Two definitions sharing a prefix used to order by pairs()'s iteration
+  -- order, which is unstable across starts -- and decides which one
+  -- matches() prefers.
+  it('breaks a tie on prefix using the definition name', function()
+    local snippets = vscode.parse(snippet_file({
+      zzz = { prefix = 'dup', body = 'z' },
+      aaa = { prefix = 'dup', body = 'a' },
+    }))
+    assert.are.same({ 'a', 'z' }, vim.tbl_map(function(snippet)
+      return snippet.body
+    end, snippets))
+  end)
+
+  -- Same contract as snipmate.parse(): (path, language?) -> snippets, extends.
+  -- VSCode packs have no inheritance directive of their own.
+  it('returns an empty extends list', function()
+    local _, extends = vscode.parse(snippet_file({ a = { prefix = 'a', body = 'b' } }))
+    assert.are.same({}, extends)
+  end)
+
+  it('drops a scope that excludes the language asked about', function()
+    local path = snippet_file({ a = { scope = 'lua', prefix = 'a', body = 'b' } })
+    assert.are.same({}, vscode.parse(path, 'python'))
+    assert.are.same({ 'a' }, helpers.prefixes(vscode.parse(path, 'lua')))
+  end)
+
+  -- The parser is a pure scope matcher: `all` is not a language it treats
+  -- specially. registry.lua is the one that knows a pack spells "every
+  -- filetype" as the literal language `all` and asks for it by that name.
+  it('treats a scope naming all like any other language name', function()
+    local path = snippet_file({ a = { scope = 'all', prefix = 'a', body = 'b' } })
+    assert.are.same({ 'a' }, helpers.prefixes(vscode.parse(path, 'all')))
+    assert.are.same({}, vscode.parse(path, 'lua'))
+  end)
+
+  it('keeps a scope naming a language and all together only when one of those is asked for', function()
+    local path = snippet_file({ a = { scope = 'lua, all', prefix = 'a', body = 'b' } })
+    assert.are.same({ 'a' }, helpers.prefixes(vscode.parse(path, 'lua')))
+    assert.are.same({ 'a' }, helpers.prefixes(vscode.parse(path, 'all')))
+    assert.are.same({}, vscode.parse(path, 'python'))
+  end)
 end)
 
 describe('vscode.contributions', function()
@@ -183,5 +225,19 @@ describe('the VSCode parser on files as VSCode writes them', function()
 
   it('still refuses a file that is not JSON at all', function()
     assert.are.same({}, vscode.parse(raw_file('this is not json')))
+  end)
+
+  -- The comma-before-bracket rewrite used to run over the whole file,
+  -- including string contents -- so a body written as `{ $1, }` decoded with
+  -- its trailing comma silently gone.
+  it('leaves a trailing comma inside a body string untouched', function()
+    local snippets = vscode.parse(raw_file([[
+{
+  // Place your snippets for lua here.
+  "Loop": { "prefix": "loop", "body": "local t = { $1, }" },
+}]]))
+
+    assert.are.equal(1, #snippets)
+    assert.are.equal('local t = { $1, }', snippets[1].body)
   end)
 end)

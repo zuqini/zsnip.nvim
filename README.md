@@ -62,6 +62,12 @@ What that leaves zsnip to do, it does completely:
   placeholder sitting on it lands in the buffer unreachable — and a body whose
   only tabstop is `$0` gets no session at all. zsnip renumbers it past the
   last real tabstop.
+- **Bodies written with CRLF.** `vim.snippet.expand()` splits on `\n` alone,
+  so a body that ships Windows line endings — 34 of friendly-snippets' do,
+  more than half of Solidity's among them — lands a literal `^M` on the end
+  of every line it inserts but the last. It is invisible on screen, saved
+  into the file and plain in the diff. zsnip collapses line endings on load,
+  and on a clipboard value, which arrives after that point.
 - **Triggers that are not words.** `<div`, `#!`, `console.log`. Every source
   tells the menu to replace the whole non-blank run before the cursor, so a
   trigger that starts with a symbol is offered at all and lands over what you
@@ -81,7 +87,10 @@ What that leaves zsnip to do, it does completely:
   `zsnip.complete` does not even need an LSP client. It is also the only one
   that has to expand the accepted snippet itself — the other three hand an
   `lsp.CompletionItem` to something that already knows what
-  `insertTextFormat = Snippet` means.
+  `insertTextFormat = Snippet` means. It only ever does so on an explicit
+  accept — `<C-y>`, or a mapping that sends it. `<CR>`, `<Space>` and `<Tab>`
+  are *discard* in Vim, same as a typed character or `<Esc>`, and never
+  expand — worth knowing if `<CR>` is how you planned to accept.
 
 ## Requirements
 
@@ -165,13 +174,19 @@ function source:
 require('zsnip.complete').enable()
 
 vim.o.autocomplete = true            -- optional; CTRL-N reaches it either way
-vim.o.completeopt = 'menu,popup,noinsert'
+vim.o.completeopt = 'menu,popup,noinsert,fuzzy'
 ```
 
 Snippets then rank alongside buffer words in one menu, and `'complete'` can cap
-each source separately. If you set the option yourself, take the entry from
-`require('zsnip.complete').source()` and pass `complete = false` so `enable()`
-installs the handlers without appending a second copy:
+each source separately. With `'autocomplete'` on, an empty base returns
+nothing — the whole filetype is not a useful menu after every space, and
+Vim's own `.` source shows nothing there either; a manual CTRL-N still lists
+the lot. `enable()` appends to both the global default and every buffer
+already open, not just the current one, so lazy-loading it on `InsertEnter`
+still reaches buffers that were open before that fired. If you set the option
+yourself, take the entry from `require('zsnip.complete').source()`
+and pass `complete = false` so `enable()` installs the handlers without
+appending a second copy:
 
 ```lua
 vim.o.complete = ".^5,w," .. require('zsnip.complete').source() .. '^10'
@@ -235,7 +250,10 @@ require('zsnip').filetype_extend('svelte', { 'html' })
 ```
 
 Every filetype also inherits the `all` bucket, and snipmate's `extends` lines
-are honoured as written.
+are honoured as written. A dotted filetype such as `javascript.glimmer` —
+which Neovim assigns itself for some filetypes, and which users set for
+others, e.g. `yaml.ansible` — also gets everything registered for each
+dot-separated component, after its own and before the `all` bucket.
 
 ## Keymaps
 
@@ -254,20 +272,28 @@ require('zsnip').setup({
   extend = {},              -- filetype -> filetypes it inherits from
   global_filetype = 'all',  -- bucket every filetype inherits; false to disable
   max_items = 100,          -- default cap for completion_items() and for
-                            -- zsnip.complete; blink/cmp/lsp ask for an
-                            -- uncapped list and let their engine filter it
+                            -- zsnip.complete; math.huge means uncapped;
+                            -- blink/cmp/lsp ask for an uncapped list and
+                            -- let their engine filter it
   documentation = true,     -- attach the body and description to items
   command = true,           -- create :ZSnip
 })
 ```
 
 An unknown key, or a known one of the wrong type, is reported with
-`vim.notify` and otherwise ignored — the rest of the config still applies.
+`vim.notify` and dropped — the rest of the config still applies, and the
+default is used in its place. So is a known key whose value it cannot use
+(`global_filetype = true`, a fractional or negative `max_items`).
 
 Both loaders also take `paths`, `include` and `exclude`; a VSCode `paths` entry
 may be a package with a `package.json` or a directory of loose snippet files,
 so `~/.config/Code/User/snippets` works as-is — comments and trailing commas
-included, which VSCode's own files are full of.
+included, which VSCode's own files are full of. A snipmate `_.snippets` —
+honza/vim-snippets ships one — is filed under `global_filetype` rather than a
+filetype literally named `_`, and its `${VISUAL}`/`$VISUAL` — snipmate's own
+name for the selected text — is rewritten to `TM_SELECTED_TEXT`. A VSCode
+pack's spelling of the same thing is the language `all`, in a manifest's
+`language` list or a `.code-snippets` entry's `scope`; it is filed the same way.
 
 ## Commands
 

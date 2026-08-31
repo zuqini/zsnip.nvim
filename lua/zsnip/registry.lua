@@ -8,16 +8,24 @@
 local body = require('zsnip.body')
 local config = require('zsnip.config')
 local util = require('zsnip.util')
-
-local PARSERS = {
-  vscode = require('zsnip.parsers.vscode'),
-  snipmate = require('zsnip.parsers.snipmate'),
-}
+local vscode_parser = require('zsnip.parsers.vscode')
+local snipmate_parser = require('zsnip.parsers.snipmate')
 
 local M = {}
 
+---@param value string|string[]|nil
+---@return string[]
+local function as_list(value)
+  if type(value) == 'table' then
+    return value
+  elseif value ~= nil then
+    return { value }
+  end
+  return {}
+end
+
 ---@class zsnip.RegistryState
----@field loaders table<zsnip.LoaderKind, zsnip.LoaderOpts>
+---@field loaders table<zsnip.LoaderKind, zsnip.Loader>
 ---@field added table<string, zsnip.Snippet[]>
 ---@field extend table<string, string[]> Inheritance declared through the API or setup()
 ---@field inherited table<string, string[]> Inheritance declared by `extends` lines in snipmate files
@@ -25,9 +33,9 @@ local M = {}
 ---@field parsed table<string, table<string, zsnip.Snippet[]>> Normalized snippets, per file path then language
 ---@field cache table<string, zsnip.Snippet[]>
 ---@field scanned_rtp string?
----@field dropped_parsed integer Bodies read from disk that |vim.snippet.expand()| would not take
+---@field dropped_parsed table<string, true> definition_key()s of bodies read from disk that |vim.snippet.expand()| would not take
 ---@field dropped_added integer The same, for snippets registered through the API -- which a rescan does not re-read
----@field options zsnip.Config The options table `cache` was resolved under
+---@field options zsnip.ResolvedConfig The options table `cache` was resolved under
 local state
 
 ---Drop everything derived from the filesystem. Kept separate from clear() so
@@ -42,7 +50,7 @@ function M.invalidate()
   state.cache = {}
   state.inherited = {}
   state.scanned_rtp = nil
-  state.dropped_parsed = 0
+  state.dropped_parsed = {}
 end
 
 ---Full reset, including registered loaders and snippets. Used by tests.
@@ -68,9 +76,9 @@ M.clear()
 ---@param snippets zsnip.Snippet[]
 ---@param filetype string
 ---@return zsnip.Snippet[] normalized
----@return integer dropped
+---@return zsnip.Snippet[] dropped Snippets whose (unparsed) body vim.snippet.expand() would not take
 local function normalize(snippets, filetype)
-  local normalized, dropped = {}, 0
+  local normalized, dropped = {}, {}
   for _, snippet in ipairs(snippets) do
     local raw = snippet.body
     if type(snippet.prefix) == 'string' and snippet.prefix ~= '' then
@@ -84,10 +92,10 @@ local function normalize(snippets, filetype)
           normalized[#normalized + 1] =
             vim.tbl_extend('force', snippet, { body = text, filetype = filetype })
         else
-          -- Counted rather than reported: this runs from inside a completion
-          -- request, where a message per malformed body in someone else's
-          -- pack would be unusable. `:checkhealth zsnip` reads the total.
-          dropped = dropped + 1
+          -- Handed back rather than reported: this runs from inside a
+          -- completion request, where a message per malformed body in someone
+          -- else's pack would be unusable. `:checkhealth zsnip` reads dropped().
+          dropped[#dropped + 1] = snippet
         end
       end
     end
@@ -95,7 +103,7 @@ local function normalize(snippets, filetype)
   return normalized, dropped
 end
 
----@param opts zsnip.LoaderOpts
+---@param opts zsnip.Loader
 ---@param language string
 ---@return boolean
 local function wanted(opts, language)
@@ -116,33 +124,23 @@ local function record(sources, language, source)
   table.insert(sources[language], source)
 end
 
----The files under `dir` ending in `suffix`, with the subdirectory each was
----found in (nil at the top level) and its name without the suffix.
----
----`vim.fs.dir` rather than `vim.fn.glob`: a configured path is data, not a
----pattern, and a `[` anywhere in one makes glob() match nothing at all -- for
----that whole directory, silently. It is also the cheaper of the two.
----@param dir string
----@param suffix string
----@param depth integer 1 for the directory itself, 2 to include one level down
----@return { path: string, parent: string?, base: string }[]
-local function files(dir, suffix, depth)
-  local found = {}
-  local ok, iterator = pcall(vim.fs.dir, dir, { depth = depth })
-  if not ok then
-    return found
+---What a pack calls the bucket that means "every filetype": vscode has no
+---name of its own for it and spells it out as the language `all`, in a
+---manifest's `language` list or a `.code-snippets` entry's `scope`;
+---snipmate's convention is a file named `_`, which honza/vim-snippets ships
+---one of. Both are filed under `global_filetype` instead, or dropped when
+---the bucket is disabled.
+---@type table<zsnip.LoaderKind, string?>
+local EVERYWHERE = { vscode = 'all', snipmate = '_' }
+
+---@param kind zsnip.LoaderKind
+---@param language string A pack's own spelling of a filetype
+---@return string|false
+local function global_alias(kind, language)
+  if language == EVERYWHERE[kind] then
+    return config.options.global_filetype
   end
-  for name, kind in iterator do
-    if kind == 'file' and vim.endswith(name, suffix) then
-      local parent, base = name:match('^(.*)/([^/]+)$')
-      found[#found + 1] = {
-        path = vim.fs.normalize(dir .. '/' .. name),
-        parent = parent,
-        base = (base or name):sub(1, -#suffix - 1),
-      }
-    end
-  end
-  return found
+  return language
 end
 
 ---Snippet files sitting loose in a directory, the way VSCode keeps a user's
@@ -152,66 +150,74 @@ end
 ---declares what it contributes in a package.json, and globbing every plugin's
 ---directory for stray JSON would find a great deal that is not a snippet.
 ---@param sources table<string, zsnip.Source[]>
----@param opts zsnip.LoaderOpts
+---@param opts zsnip.Loader
 ---@param dir string
 ---@param claimed table<string, true> Paths a package.json already spoke for
 local function scan_standalone(sources, opts, dir, claimed)
-  local function keep(language, path)
-    if wanted(opts, language) then
-      record(sources, language, { kind = 'vscode', path = path })
+  ---@param language string
+  ---@param path string
+  ---@param filter? string The pack's own spelling of the language to hand
+  --- the parser, when this record's language came from the file's own
+  --- `scope` -- see zsnip.Source.scope. A `<language>.json` file's language
+  --- is its filename, not a scope, and passes nothing.
+  local function keep(language, path, filter)
+    local bucket = global_alias('vscode', language)
+    if bucket and wanted(opts, bucket) then
+      record(sources, bucket, { kind = 'vscode', path = path, scope = filter })
     end
   end
 
-  for _, file in ipairs(files(dir, '.json', 1)) do
+  for _, file in ipairs(util.files(dir, '.json', 1)) do
     if file.base ~= 'package' and not claimed[file.path] then
       keep(file.base, file.path)
     end
   end
 
-  for _, file in ipairs(files(dir, '.code-snippets', 1)) do
+  for _, file in ipairs(util.files(dir, '.code-snippets', 1)) do
     local path = file.path
     if not claimed[path] then
-      local languages, unscoped = PARSERS.vscode.scopes(path)
+      local languages, unscoped = vscode_parser.scopes(path)
       for _, language in ipairs(languages) do
-        keep(language, path)
+        keep(language, path, language)
       end
       -- An unscoped snippet applies to every language, which is what the
       -- global bucket already means here.
       local global = config.options.global_filetype
       if unscoped and global then
-        keep(global, path)
+        keep(global, path, EVERYWHERE.vscode)
       end
     end
   end
 end
 
 ---@param sources table<string, zsnip.Source[]>
----@param opts zsnip.LoaderOpts
+---@param opts zsnip.Loader
 local function scan_vscode(sources, opts)
   local manifests = vim.api.nvim_get_runtime_file('package.json', true)
-  for _, path in ipairs(util.list(opts.paths)) do
-    manifests[#manifests + 1] = vim.fs.normalize(path) .. '/package.json'
+  for _, path in ipairs(opts.paths) do
+    manifests[#manifests + 1] = path .. '/package.json'
   end
 
   local claimed = {}
   for _, manifest in ipairs(manifests) do
-    for _, entry in ipairs(PARSERS.vscode.contributions(manifest)) do
+    for _, entry in ipairs(vscode_parser.contributions(manifest)) do
       claimed[entry.path] = true
-      if wanted(opts, entry.language) then
-        record(sources, entry.language, { kind = 'vscode', path = entry.path })
+      local language = global_alias('vscode', entry.language)
+      if language and wanted(opts, language) then
+        record(sources, language, { kind = 'vscode', path = entry.path })
       end
     end
   end
 
-  for _, dir in ipairs(util.list(opts.paths)) do
-    scan_standalone(sources, opts, vim.fs.normalize(dir), claimed)
+  for _, dir in ipairs(opts.paths) do
+    scan_standalone(sources, opts, dir, claimed)
   end
 end
 
 ---snipmate names its files after the filetype, either directly or as a
 ---directory of them.
 ---@param sources table<string, zsnip.Source[]>
----@param opts zsnip.LoaderOpts
+---@param opts zsnip.Loader
 local function scan_snipmate(sources, opts)
   ---@type { path: string, language: string }[]
   local found = {}
@@ -223,19 +229,44 @@ local function scan_snipmate(sources, opts)
 
   collect(vim.api.nvim_get_runtime_file('snippets/*.snippets', true), ':t:r')
   collect(vim.api.nvim_get_runtime_file('snippets/*/*.snippets', true), ':h:t')
-  for _, dir in ipairs(util.list(opts.paths)) do
+  for _, dir in ipairs(opts.paths) do
     -- A directory of them is named after the filetype it serves; a loose file
     -- is named after it directly.
-    for _, file in ipairs(files(vim.fs.normalize(dir), '.snippets', 2)) do
+    for _, file in ipairs(util.files(dir, '.snippets', 2)) do
       found[#found + 1] = { path = file.path, language = file.parent or file.base }
     end
   end
 
   for _, file in ipairs(found) do
-    if wanted(opts, file.language) then
-      record(sources, file.language, { kind = 'snipmate', path = file.path })
+    local language = global_alias('snipmate', file.language)
+    if language and wanted(opts, language) then
+      record(sources, language, { kind = 'snipmate', path = file.path })
     end
   end
+end
+
+-- Order is load-bearing: it is the order ensure_scanned() below scans in, and
+-- health.lua reports loaders in the same order.
+local FORMATS = {
+  { kind = 'vscode', parser = vscode_parser, scan = scan_vscode },
+  { kind = 'snipmate', parser = snipmate_parser, scan = scan_snipmate },
+}
+
+local by_kind = {}
+for _, format in ipairs(FORMATS) do
+  by_kind[format.kind] = format
+end
+
+---Every loader kind zsnip knows how to scan, in the order ensure_scanned()
+---below scans them. `health.lua` iterates this rather than naming the two
+---again.
+---@return zsnip.LoaderKind[]
+function M.kinds()
+  local kinds = {}
+  for i, format in ipairs(FORMATS) do
+    kinds[i] = format.kind
+  end
+  return kinds
 end
 
 ---The runtimepath is re-read on every lookup rather than watched: a plugin
@@ -250,11 +281,10 @@ local function ensure_scanned()
   end
 
   local sources = {}
-  if state.loaders.vscode then
-    scan_vscode(sources, state.loaders.vscode)
-  end
-  if state.loaders.snipmate then
-    scan_snipmate(sources, state.loaders.snipmate)
+  for _, format in ipairs(FORMATS) do
+    if state.loaders[format.kind] then
+      format.scan(sources, state.loaders[format.kind])
+    end
   end
 
   M.invalidate()
@@ -278,6 +308,20 @@ local function ensure_current()
   end
 end
 
+---Identity of a definition a file yields, not of the (file, bucket) pair
+---that asked for it: a manifest naming `["markdown", "all"]`, a `scope:
+---"lua, all"` entry, or an unscoped entry in a mixed `.code-snippets` reaches
+---parse() once per bucket but is one definition. get() serves it once per
+---filetype and dropped() counts it once on that key. `add()`-registered
+---snippets have no source and are served as registered -- a caller adding
+---the same body twice asked for it.
+---@param source zsnip.Source
+---@param snippet zsnip.Snippet
+---@return string
+local function definition_key(source, snippet)
+  return source.path .. '\0' .. snippet.prefix .. '\0' .. tostring(snippet.body)
+end
+
 ---Cached per path **and** language, not per path alone: normalize() stamps the
 ---language onto every snippet, and one VSCode file routinely covers several --
 ---friendly-snippets' `global.json` serves six. Keyed on the path alone,
@@ -298,30 +342,44 @@ local function parse(source, language)
     return per_language[language]
   end
 
-  local snippets, extends
-  if source.kind == 'snipmate' then
-    snippets, extends = PARSERS.snipmate.parse(source.path)
-  else
-    -- The language is passed on so a `.code-snippets` file, which is one file
-    -- serving several, hands back only what is in scope for this one.
-    snippets, extends = PARSERS.vscode.parse(source.path, language), {}
-  end
+  -- source.scope carries the pack's own spelling of the language, recorded
+  -- only when it came from this file's own `scope`: a `.code-snippets` file,
+  -- which is one file serving several, then hands back only what is in
+  -- scope for this one. A manifest- or filename-derived source has no
+  -- `scope` and must not filter by it -- see docs/api.md. snipmate has no
+  -- `scope` and ignores the parameter either way.
+  local snippets, extends = by_kind[source.kind].parser.parse(source.path, source.scope)
 
   if #extends > 0 then
     state.inherited[language] = vim.list_extend(state.inherited[language] or {}, extends)
   end
 
   local normalized, dropped = normalize(snippets, language)
-  state.dropped_parsed = state.dropped_parsed + dropped
+  for _, snippet in ipairs(dropped) do
+    state.dropped_parsed[definition_key(source, snippet)] = true
+  end
   per_language[language] = normalized
   return normalized
+end
+
+---`filetype` itself, then its dot-separated components. The exact name is
+---not one of its own components -- `yaml.ansible` splits into `yaml` and
+---`ansible` -- so it has to be listed outright, and it comes first.
+---@param filetype string
+---@return string[]
+function M.components(filetype)
+  local list = { filetype }
+  if filetype:find('.', 1, true) then
+    vim.list_extend(list, vim.split(filetype, '.', { plain = true }))
+  end
+  return list
 end
 
 ---@param filetype string
 ---@return string[]
 local function parents(filetype)
   local list = {}
-  vim.list_extend(list, util.list(config.options.extend and config.options.extend[filetype]))
+  vim.list_extend(list, as_list(config.options.extend[filetype]))
   vim.list_extend(list, state.extend[filetype] or {})
   -- Read after the files for this filetype have been parsed: an `extends`
   -- line only becomes known once the file carrying it has been read.
@@ -360,11 +418,17 @@ end
 function M.enable(kind, opts)
   opts = opts or {}
   local current = state.loaders[kind] or {}
-  local paths = util.list(current.paths)
-  vim.list_extend(paths, util.list(opts.paths))
+
+  -- Normalized before the dedupe accumulate() does: `~/x` and its expansion
+  -- are the same path, but not the same string, and :checkhealth would
+  -- otherwise list both.
+  local paths = vim.tbl_map(vim.fs.normalize, as_list(opts.paths))
 
   state.loaders[kind] = {
-    paths = paths,
+    -- Both sides are always a list, never nil, so accumulate() cannot really
+    -- hand back nil here; the `or {}` is only to satisfy that its signature
+    -- says it might.
+    paths = accumulate(as_list(current.paths), paths) or {},
     include = accumulate(current.include, opts.include),
     exclude = accumulate(current.exclude, opts.exclude),
   }
@@ -375,7 +439,7 @@ end
 ---are the answer to "why does it find nothing", so this hands back what was
 ---given rather than just whether anything was.
 ---@param kind zsnip.LoaderKind
----@return zsnip.LoaderOpts?
+---@return zsnip.Loader?
 function M.loader(kind)
   return state.loaders[kind]
 end
@@ -385,7 +449,7 @@ end
 ---does; what came through |zsnip.add_snippets()| lasts until clear().
 ---@return integer
 function M.dropped()
-  return state.dropped_parsed + state.dropped_added
+  return vim.tbl_count(state.dropped_parsed) + state.dropped_added
 end
 
 ---@param filetype string
@@ -396,7 +460,7 @@ function M.add(filetype, snippets)
   vim.list_extend(state.added[filetype], normalized)
   -- Not part of what invalidate() drops: a rescan does not re-read these, so
   -- resetting the count with the parsed one would lose it.
-  state.dropped_added = state.dropped_added + dropped
+  state.dropped_added = state.dropped_added + #dropped
   state.cache = {}
 end
 
@@ -404,14 +468,16 @@ end
 ---@param inherits string|string[]
 function M.extend(filetype, inherits)
   state.extend[filetype] = state.extend[filetype] or {}
-  vim.list_extend(state.extend[filetype], util.list(inherits))
+  vim.list_extend(state.extend[filetype], as_list(inherits))
   state.cache = {}
 end
 
 ---Every snippet available to a filetype: its own, then the ones it inherits
----(depth first, in the order the parents were declared), then the global
----bucket. Snippets registered through |zsnip.add_snippets()| come before
----file-loaded ones for the same filetype, so a config can shadow a pack.
+---(depth first, in the order the parents were declared), then -- for a dotted
+---filetype like `javascript.glimmer` -- each dot-separated component on its
+---own, then the global bucket. Snippets registered through
+---|zsnip.add_snippets()| come before file-loaded ones for the same filetype,
+---so a config can shadow a pack.
 ---@param filetype string
 ---@return zsnip.Snippet[]
 function M.get(filetype)
@@ -421,7 +487,7 @@ function M.get(filetype)
     return state.cache[filetype]
   end
 
-  local snippets, visited, seen_path = {}, {}, {}
+  local snippets, visited, seen_path, seen_definition = {}, {}, {}, {}
 
   local function collect(language)
     if visited[language] then
@@ -436,10 +502,27 @@ function M.get(filetype)
       -- for the language asked about. Keyed on the path alone, a typescript
       -- buffer that inherits javascript sees the file once -- as typescript --
       -- and the javascript snippets in it are silently gone.
+      --
+      -- The key leaves out `source.scope`, so where one path was recorded
+      -- twice under one bucket the first record decides which entries the
+      -- file serves and the second is never parsed. Only `all` is aliased
+      -- onto a bucket, so reaching that needs a `.code-snippets` holding
+      -- both an `all` entry and one scoped to the literal name a user
+      -- renamed `global_filetype` to -- a pack written for one user's
+      -- config, which the scope rules decline to serve either way.
       local visit = source.path .. '\0' .. language
       if not seen_path[visit] then
         seen_path[visit] = true
-        vim.list_extend(snippets, parse(source, language))
+        for _, snippet in ipairs(parse(source, language)) do
+          -- First occurrence wins; collection order is own bucket -> parents
+          -- -> global, so the stamp a caller sees is the nearest bucket that
+          -- actually serves this definition (see definition_key()).
+          local key = definition_key(source, snippet)
+          if not seen_definition[key] then
+            seen_definition[key] = true
+            snippets[#snippets + 1] = snippet
+          end
+        end
       end
     end
 
@@ -448,7 +531,13 @@ function M.get(filetype)
     end
   end
 
-  collect(filetype)
+  -- Neovim assigns dotted filetypes itself for some (javascript.glimmer,
+  -- typescript.glimmer) and users set others (yaml.ansible). `visited`
+  -- already keeps an explicit add('yaml.ansible', ...) from being collected
+  -- twice.
+  for _, component in ipairs(M.components(filetype)) do
+    collect(component)
+  end
   local global = config.options.global_filetype
   if global then
     collect(global)

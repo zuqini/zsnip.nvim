@@ -50,8 +50,13 @@ What zsnip adds on top of the engine:
   a trigger is offered at all and lands over what you typed.
 - `${0:text}` is renumbered past the last real tabstop, so a placeholder on
   the exit point is reachable.
-- Native sources for blink.cmp and nvim-cmp, and an in-process LSP server for
-  everything else -- including Neovim's own completion, with no plugin at all.
+- Bodies written with CRLF. |vim.snippet.expand()| splits on `\n` alone, so a
+  body shipping Windows line endings lands a literal ^M on the end of every
+  inserted line but the last; zsnip collapses them on load, and on a clipboard
+  value, which arrives after that point.
+- Four ways to serve them: native sources for blink.cmp and nvim-cmp, an
+  in-process LSP server for any menu that speaks LSP, and a `'complete'`
+  function source for Neovim's own completion, with no plugin at all.
 
 ==============================================================================
 2. REQUIREMENTS                                            *zsnip-requirements*
@@ -89,16 +94,19 @@ Optional -- every default works without it. Stores options and creates
       extend = {},              -- filetype -> filetypes it inherits from
       global_filetype = 'all',  -- bucket every filetype inherits; false to disable
       max_items = 100,          -- default cap for completion_items() and
-                                -- for zsnip.complete; blink/cmp/lsp ask
-                                -- for an uncapped list and filter it
+                                -- for zsnip.complete; math.huge means
+                                -- uncapped; blink/cmp/lsp ask for an
+                                -- uncapped list and filter it
       documentation = true,     -- attach the body and description to items
       command = true,           -- create :ZSnip
     })
 <
 An unknown key, or a known one of the wrong type, is reported with
-|vim.notify()| and otherwise ignored -- the rest of the config still applies.
-`command = false` removes an existing |:ZSnip| as well as declining to create
-one, so a later setup() can undo an earlier one.
+|vim.notify()| and dropped -- the rest of the config still applies, and the
+default is used in its place. So is a known key whose value it cannot use
+(`global_filetype = true`, a fractional or negative `max_items`).
+`command = false` removes an existing |:ZSnip| as well as declining to
+create one, so a later setup() can undo an earlier one.
 
 ==============================================================================
 5. LOADERS                                                      *zsnip-loaders*
@@ -122,7 +130,15 @@ Options:
     exclude   string[]         Load every language except these
 
 A snipmate path is a directory containing *.snippets files, or per-filetype
-directories of them. Repeated calls merge rather than replace.
+directories of them. Repeated calls merge rather than replace. `_.snippets` --
+snipmate's convention for "every filetype", which honza/vim-snippets ships one
+of -- is filed under `global_filetype` instead of a filetype literally named
+`_`, and dropped entirely when `global_filetype` is `false`. `${VISUAL}`/
+`$VISUAL`, snipmate's own name for the selected text, is rewritten to
+`TM_SELECTED_TEXT` on the way in. A VSCode pack's spelling of "every filetype"
+is the language `all` -- in a manifest's `language` list or a `.code-snippets`
+entry's `scope` -- and it is filed under `global_filetype`, or dropped, the
+same way.
 
 A VSCode path is a directory containing a package.json, or one holding loose
 snippet files the way VSCode keeps a user's own -- point one at
@@ -135,6 +151,13 @@ snippet files the way VSCode keeps a user's own -- point one at
     package.json       still decides when present, and the files it names
                        are not read a second time from the glob
 
+`scope` decides which languages a file serves in the *.code-snippets row
+alone. A <language>.json takes its filetype from its filename and a
+manifest-declared file takes its from the manifest, and a `scope` key inside
+one of those is ignored rather than filtered on -- real packs carry TextMate
+scopes (`source.lua`) there harmlessly, and filtering on them drops most of
+what the pack serves.
+
 Loose files are only looked for under a configured path. A plugin on the
 'runtimepath' declares what it contributes in a package.json, and globbing
 every plugin directory for stray JSON would turn up much that is not a
@@ -145,7 +168,11 @@ zsnip.filetype_extend({filetype}, {inherits})
 
 Give {filetype} everything registered for {inherits} (a filetype or a list).
 Cycles are safe. Every filetype also inherits the `global_filetype` bucket,
-and snipmate `extends` lines are honoured as written.
+and snipmate `extends` lines are honoured as written. A dotted filetype such
+as `javascript.glimmer` -- which Neovim assigns itself for some filetypes, and
+which users set for others, e.g. `yaml.ansible` -- also gets everything
+registered for each dot-separated component, after its own and before
+`global_filetype`.
 
 ==============================================================================
 6. SNIPPETS FROM LUA                                       *zsnip-lua-snippets*
@@ -210,13 +237,25 @@ is required by `register()` only, so the module loads without it.
 zsnip.start_lsp_server({opts})
 
 Start an in-process language server answering `textDocument/completion` with
-the snippets of the requesting buffer's filetype, and attach it to every
-buffer that gets a filetype. Idempotent.
+the snippets of the requesting buffer's filetype, and attach it to the
+buffers that qualify. Idempotent: calling it again stops whatever a
+previous call started, clients included, before starting the new one.
+
+A buffer holds the client when it has a filetype, has no 'buftype' (prompts,
+terminals, :help, ...), and, if `filetypes` is given, its filetype or one of a
+dotted filetype's dot-separated components is on the list. This gate re-runs
+on every FileType, so a buffer that stops qualifying loses the client it
+already has, not only one that never gets one.
 
 Options:
-    name                string    Client name (default "zsnip")
-    filetypes           string[]  Attach only to these filetypes
-    limit               integer   Cap on items per response (default: uncapped)
+    name                string    Client name, as it appears in `:checkhealth vim.lsp`
+                                  (default "zsnip")
+    filetypes           string[]  Attach only to these filetypes, or a dotted
+                                  one's dot-separated components ("javascript"
+                                  also attaches to "javascript.glimmer")
+    limit               number    Cap on items per response: a non-negative
+                                  whole number, or `math.huge` for no cap
+                                  (default: uncapped)
     documentation       boolean   Attach the body as item documentation
     filter              fun       Keep only the snippets it returns true for
     trigger_characters  string[]  Characters that make a client ask unprompted
@@ -244,7 +283,7 @@ to decide when to ask unprompted:
 A trigger can begin with any printable character -- `2x1table` and `#!` are
 both real friendly-snippets triggers -- so a letters-only list leaves the first
 firing a keystroke late and the second never firing at all. This decides only
-*when* the client asks; which items are offered, and what each one replaces, is
+when the client asks; which items are offered, and what each one replaces, is
 settled by the textEdit zsnip sends. With <C-x><C-o> it is not needed at all.
 >lua
     local triggers = {}
@@ -273,13 +312,18 @@ Neovim's built-in completion~
     require('zsnip.complete').enable()
 
     vim.o.autocomplete = true      -- optional; CTRL-N reaches it either way
-    vim.o.completeopt = 'menu,popup,noinsert'
+    vim.o.completeopt = 'menu,popup,noinsert,fuzzy'
 <
 A function source in 'complete', so snippets rank next to buffer words in one
 menu and 'autocomplete' drives them as you type. No completion plugin and no
-LSP client: enable() appends one entry to 'complete' and installs two
-handlers -- a |CompleteDone| expander and a |CompleteChanged| stylist for the
-preview.
+LSP client: enable() appends one entry to 'complete' and installs two handlers
+-- a |CompleteDone| expander, which only fires on an accepted item (<C-y>, or
+a mapping that sends it; <CR>, <Space> and <Tab> are `discard` in Vim, same as
+a typed character or <Esc>, and never expand), and a |CompleteChanged| stylist
+for the preview. Because 'complete' is buffer-local, enable() appends to the
+global default and to every buffer already open, not just the current one, so
+lazy-loading it on InsertEnter still reaches buffers that were open before
+that fired.
 
 Each source can be capped on its own. Setting 'complete' yourself means enable()
 should not append to it as well, so take the entry from source() and pass
@@ -287,8 +331,9 @@ should not append to it as well, so take the entry from source() and pass
     vim.o.complete = ".^5,w," .. require('zsnip.complete').source() .. '^10'
     require('zsnip.complete').enable({ complete = false })
 <
-enabled() and disable() read the entry with or without its `^{count}`, so a
-capped setup is recognised rather than appended to twice.
+enabled({bufnr}) and disable() read the entry with or without its `^{count}`,
+so a capped setup is recognised rather than appended to twice; enabled()
+defaults {bufnr} to the current buffer, since 'complete' is scoped to it.
 
 enable() takes the same `limit`, `documentation` and `filter` as the other
 sources -- except that `limit` defaults to `max_items` here rather than to
@@ -305,20 +350,25 @@ menu reuses the same float. The menu row stays the trigger and its kind alone.
 visible without selecting, with the preview holding a plain body.
 `documentation = false` empties both wherever they went, and disable() undoes
 everything enable() did. It deliberately leaves 'autocomplete' alone --
-whether the menu opens by itself is your decision.
+whether the menu opens by itself is your decision. With it on, an empty base
+returns nothing: the whole filetype is not a useful menu after every space,
+and Vim's own `.` source shows nothing there either. A manual CTRL-N with
+'autocomplete' off still lists the lot.
 
 An `expand` function replaces |vim.snippet.expand()| as what turns the
 accepted body into a session -- for a caller whose user chose a different
 engine somewhere else. The trigger is already deleted by the time it runs.
 
 Two things are specific to this path. zsnip does the matching, returning
-`refresh = "always"` so it is re-asked on every change; add `fuzzy` to
-'completeopt' if you want Vim's own narrowing to agree with zsnip's. And zsnip
-does the expanding, since nothing else here knows what a snippet body is -- the
-range it replaces is the whole non-blank run before the cursor, because a third
-of real triggers mix words and symbols (`console.log`, `<div`,
-`#!/usr/bin/env`). A trigger typed after a bracket still works: `(req` keeps
-the `(` and expands `req`.
+`refresh = "always"` so it is re-asked on every change -- and without `fuzzy`
+in 'completeopt' Vim narrows the result again by its own plain-keyword rule,
+so a hit whose `word` is not a prefix of the keyword under the cursor
+(`clog` for `console.log`, `rq` for `req`) is filtered back out and never
+shown at all. And zsnip does the expanding, since nothing else here knows
+what a snippet body is -- the range it replaces is the whole non-blank run
+before the cursor, because a third of real triggers mix words and symbols
+(`console.log`, `<div`, `#!/usr/bin/env`). A trigger typed after a bracket
+still works: `(req` keeps the `(` and expands `req`.
 
                                                      *zsnip.completion_items()*
 zsnip.completion_items({opts})
@@ -334,7 +384,8 @@ Options:
     position       table    lsp.Position the response is anchored to; defaults
                              to the real cursor when {bufnr} is the current
                              buffer
-    limit          integer  Overrides `max_items`
+    limit          number   Overrides `max_items`: a non-negative whole
+                            number, or `math.huge` for no cap
     documentation  boolean  Overrides the configured default
     filter         function  Keep only the snippets it returns true for;
                              runs before matching and before `limit`
@@ -346,7 +397,16 @@ out for not matching the prefix `div`, and `#!` would be inserted in front of
 its own expansion rather than over it. Every item in a response shares one
 span, because |vim.lsp.completion| filters the whole list against the lowest
 start it is given. Text in the run that the trigger does not account for -- the
-`(` of `(req` -- is put back in front of the body, escaped so it stays text.
+`(` of `(req` -- goes back in front of the body, escaped so it stays text; it
+also goes into `filterText` when some suffix of the run actually matched the
+trigger, and not otherwise, so a prefix-filtering client does not offer every
+snippet after a bare `(`. How much of the run counts as such text is decided
+per legal start of the run, longest first: the first one the trigger
+fuzzy-matches from -- whether that start began the trigger outright or only
+fuzzy-matched it -- is where that text ends. `(c.log` against `console.log`
+keeps `(`, since the match starts one byte in, at `c.log`; `c.c` against
+`console.clear` keeps nothing, since the match already starts at the run's
+first byte.
 
 A `textEdit` needs a cursor to anchor to. There is none when {bufnr} is not the
 current buffer and no {position} was given; the items are then plain.
@@ -356,9 +416,10 @@ current buffer and no {position} was given; the items are then plain.
 
                                                                   *zsnip.get()*
 zsnip.get({filetype})
-    Every snippet available to a filetype, in shadowing order. Defaults to the
-    current buffer's filetype. Each entry carries a `filetype` field naming
-    where it came from.
+    Every snippet available to a filetype (its own, then inherited, then each
+    dot-separated component of a dotted filetype, then global), in shadowing
+    order. Defaults to the current buffer's filetype. Each entry carries a
+    `filetype` field naming where it came from.
 
                                                             *zsnip.available()*
 zsnip.available()

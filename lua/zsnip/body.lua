@@ -55,12 +55,28 @@ end
 ---typed word, so the raised error takes the word with it.
 ---@param body string
 ---@return boolean
-function M.expandable(body)
+function M.accepted(body)
   if not has_grammar then
     return true
   end
   local ok, parsed = pcall(grammar.parse, body)
   return ok and well_formed(parsed)
+end
+
+---Whether the grammar is available to validate a body against, so
+---`:checkhealth zsnip` can report the same thing this module decided on.
+---@type boolean
+M.validates = has_grammar
+
+---|vim.snippet.expand()| splits on `\n` only, so a `\r` left in by a source
+---that writes CRLF or classic-Mac line endings -- a JSON pack, a Windows
+---clipboard -- lands as a literal control byte in the buffer rather than a
+---line break. The one rule both a raw body and a resolved variable value
+---have to go through before either reaches the engine.
+---@param text string
+---@return string
+local function normalize_eol(text)
+  return (text:gsub('\r\n', '\n'):gsub('\r', '\n'))
 end
 
 local DATE_FORMAT = {
@@ -75,7 +91,6 @@ local DATE_FORMAT = {
   CURRENT_HOUR = '%H',
   CURRENT_MINUTE = '%M',
   CURRENT_SECOND = '%S',
-  CURRENT_TIMEZONE_OFFSET = '%z',
 }
 
 ---Neither Neovim nor LuaJIT seeds `math.random`, so a UUID built from it is
@@ -115,13 +130,21 @@ end
 local VOLATILE = { RANDOM = true, RANDOM_HEX = true, UUID = true }
 
 ---@param name string
----@return string?
+---@return string? nil for a name zsnip does not know, left as written by the
+---caller; '' for a known name this buffer cannot answer, because an
+---unresolved variable reaches |vim.snippet.expand()| as a tabstop holding
+---its own name.
 local function variable(name)
   local format = DATE_FORMAT[name]
   if format then
     return tostring(os.date(format))
   elseif name == 'CURRENT_SECONDS_UNIX' then
     return tostring(os.time())
+  elseif name == 'CURRENT_TIMEZONE_OFFSET' then
+    -- os.date gives '+0100'; VSCode's variable is '+01:00'. A result that
+    -- does not match (a bare 'Z', or an empty string on a platform without
+    -- %z) is returned as-is rather than mangled.
+    return (tostring(os.date('%z')):gsub('^([%+%-]%d%d)(%d%d)$', '%1:%2'))
   elseif name == 'RANDOM' then
     local bytes = random_bytes(3)
     return ('%06d'):format((bytes[1] * 65536 + bytes[2] * 256 + bytes[3]) % 1000000)
@@ -135,7 +158,9 @@ local function variable(name)
     return ('%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x')
       :format(unpack(bytes))
   elseif name == 'CLIPBOARD' then
-    return table.concat(vim.fn.getreg('+', 1, true), '\n')
+    -- getreg's list form only splits on '\n', so a Windows copy leaves '\r'
+    -- at the end of every line but the last.
+    return normalize_eol(table.concat(vim.fn.getreg('+', 1, true), '\n'))
   elseif name == 'WORKSPACE_FOLDER' then
     return vim.fn.getcwd()
   elseif name == 'WORKSPACE_NAME' then
@@ -143,14 +168,12 @@ local function variable(name)
   elseif name == 'RELATIVE_FILEPATH' then
     return vim.fn.expand('%:.') --[[@as string]]
   elseif name == 'LINE_COMMENT' then
-    return (comment_parts())
+    return (comment_parts()) or ''
   elseif name == 'BLOCK_COMMENT_START' or name == 'BLOCK_COMMENT_END' then
     local left, right = comment_parts()
-    -- 'commentstring' only describes a block comment when it wraps: a
-    -- line-comment buffer has no answer here, and guessing one would emit a
-    -- stray `--` where the pack expected `/*`.
+    -- 'commentstring' only describes a block comment when it wraps.
     if right == nil or right == '' then
-      return nil
+      return ''
     end
     return name == 'BLOCK_COMMENT_START' and left or right
   end
@@ -313,7 +336,10 @@ local function resolve(body)
   -- Each pass rewrote it, so the positions the next one reports are into a
   -- different string.
   subject = body
-  return (body:gsub('()%$([A-Z_][A-Z_0-9]*)', substitute))
+  -- The frontier keeps the match from stopping at the class's last uppercase
+  -- letter: without it $CURRENT_YEARabc reads as $CURRENT_YEAR followed by
+  -- literal text `abc`, where the grammar reads one variable, CURRENT_YEARabc.
+  return (body:gsub('()%$([A-Z_][A-Z_0-9]*)%f[^%w_]', substitute))
 end
 
 ---Resolve the variables Neovim does not know about.
@@ -334,7 +360,7 @@ end
 ---@param body string
 ---@return string
 function M.editable_final_tabstop(body)
-  if not body:find('${0:', 1, true) then
+  if not body:find('%${0[:|]') then
     return body
   end
 
@@ -348,13 +374,14 @@ function M.editable_final_tabstop(body)
     last = math.max(last, tonumber(index) or 0)
   end
 
-  local renumbered = ('${%d:'):format(last + 1)
-  return (body:gsub('()%${0:', function(at)
+  -- `${0|choices|}` renumbers the same way `${0:default}` does: it is still a
+  -- placeholder holding text, just one the engine restricts you to picking.
+  return (body:gsub('()%${0([:|])', function(at, delim)
     -- `\${0:` is text the author escaped to keep verbatim, not a tabstop.
     if escaped(body, at) then
       return nil
     end
-    return renumbered
+    return ('${%d%s'):format(last + 1, delim)
   end))
 end
 
@@ -366,8 +393,20 @@ end
 ---@param raw string
 ---@return string?
 function M.normalize(raw)
-  local text = M.editable_final_tabstop(raw)
-  return M.expandable(text) and text or nil
+  local text = M.editable_final_tabstop(normalize_eol(raw))
+  return M.accepted(text) and text or nil
+end
+
+---resolve(), refusing a body that came back '' -- every variable it held
+---answered with nothing, as $BLOCK_COMMENT_START does outside a block
+---comment, or $CLIPBOARD with an empty clipboard -- the way M.normalize()
+---already refuses an empty body at load time: |vim.snippet.expand()| raises
+---on it. M.resolve() stays on the raw one; it is documented to return a string.
+---@param body string
+---@return string?
+local function resolved(body)
+  local out = resolve(body)
+  return out ~= '' and out or nil
 end
 
 ---@param snippet zsnip.Snippet
@@ -380,14 +419,24 @@ local function text(snippet)
       return nil
     end
     local normalized = M.normalize(produced)
-    return normalized and resolve(normalized) or nil
+    return normalized and resolved(normalized) or nil
   end
-  return resolve(raw)
+  -- `filetype` is what the registry stamps on everything it hands out, and
+  -- it already normalized a written body at load time. Without it -- a table
+  -- built by hand and handed straight to expand_snippet() -- that never ran,
+  -- so it has to happen here instead.
+  if snippet.filetype == nil then
+    local normalized = M.normalize(raw)
+    return normalized and resolved(normalized) or nil
+  end
+  return resolved(raw)
 end
 
 ---Turn a snippet's body into the text handed to |vim.snippet.expand()|.
 ---Returns nil when a function body declines to produce one, or when what it
----produced cannot be parsed.
+---produced cannot be parsed -- and the same for a string body on a snippet
+---the registry never stamped, which is otherwise the one path that skips
+---normalization entirely.
 ---@param snippet zsnip.Snippet
 ---@return string?
 function M.text(snippet)
