@@ -17,8 +17,8 @@ local M = {}
 
 ---@class zsnip.LspOpts : zsnip.SourceOpts
 ---@field name? string Client name, as it appears in `:checkhealth vim.lsp` (default 'zsnip')
----@field filetypes? string[] Attach only to these filetypes, or a dotted one's dot-separated components (default: all)
----@field trigger_characters? string[] Characters that make a client ask unprompted (default: none)
+---@field filetypes? string|string[] Attach only to these filetypes, or a dotted one's dot-separated components (default: all)
+---@field trigger_characters? string|string[] Characters that make a client ask unprompted (default: none)
 ---@field completion? boolean|vim.lsp.completion.BufferOpts Wire each buffer up for |vim.lsp.completion|
 
 ---What |vim.lsp.start()| expects back from a `cmd` function. Declared here
@@ -45,6 +45,14 @@ local function requesting_buffer(uri)
   end
   local bufnr = vim.uri_to_bufnr(uri)
   return vim.api.nvim_buf_is_loaded(bufnr) and bufnr or vim.api.nvim_get_current_buf()
+end
+
+---Mirrors `registry.lua`'s file-local `as_list()`, which is not importable.
+---Wraps a bare value in a single-element list; a table is returned as-is.
+---@param value string|string[]
+---@return string[]
+local function as_list(value)
+  return type(value) == 'table' and value or { value }
 end
 
 ---@param opts zsnip.LspOpts
@@ -77,6 +85,7 @@ local function server(opts)
     ---@return any
     local function answer(method, params)
       if method == 'initialize' then
+        ---@type lsp.InitializeResult
         return {
           capabilities = {
             completionProvider = {
@@ -85,7 +94,7 @@ local function server(opts)
               -- on every keystroke of their own accord, and a client that
               -- does not should be told which characters matter by the
               -- config that knows what its triggers look like.
-              triggerCharacters = opts.trigger_characters or {},
+              triggerCharacters = opts.trigger_characters and as_list(opts.trigger_characters) or {},
               resolveProvider = false,
             },
             positionEncoding = 'utf-16',
@@ -210,6 +219,9 @@ function M.start(opts)
   opts = opts or {}
   local name = opts.name or 'zsnip'
   local cmd = server(opts)
+  -- Normalized once here rather than inside allowed(), which filetype_allowed()
+  -- runs on every FileType event, for every buffer.
+  local filetypes = opts.filetypes and as_list(opts.filetypes) or nil
 
   ---Whether `bufnr` should hold the client. A scratch or prompt buffer is
   ---wasted on one, and on the prompt specifically it is worse than wasted:
@@ -219,7 +231,7 @@ function M.start(opts)
     local filetype = vim.bo[bufnr].filetype
     return filetype ~= ''
       and vim.bo[bufnr].buftype == ''
-      and (not opts.filetypes or filetype_allowed(filetype, opts.filetypes))
+      and (not filetypes or filetype_allowed(filetype, filetypes))
   end
 
   local function attach(bufnr)

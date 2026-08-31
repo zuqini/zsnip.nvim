@@ -247,6 +247,21 @@ describe('registry discovery', function()
     assert.are.same({ 'c' }, helpers.prefixes(registry.get('python')))
   end)
 
+  it('accepts a bare string for include and exclude, same as a one-element list', function()
+    helpers.use_rtp(helpers.vscode_pack({
+      lua = { a = { prefix = 'a', body = 'b' } },
+      python = { c = { prefix = 'c', body = 'd' } },
+    }))
+    require('zsnip.loaders.from_vscode').lazy_load({ include = 'lua' })
+    assert.are.same({ 'a' }, helpers.prefixes(registry.get('lua')))
+    assert.are.same({}, registry.get('python'))
+
+    helpers.reset()
+    require('zsnip.loaders.from_vscode').lazy_load({ exclude = 'lua' })
+    assert.are.same({}, registry.get('lua'))
+    assert.are.same({ 'c' }, helpers.prefixes(registry.get('python')))
+  end)
+
   it('rescans when the runtimepath changes', function()
     helpers.use_rtp(helpers.vscode_pack({ lua = { a = { prefix = 'a', body = 'b' } } }))
     require('zsnip.loaders.from_vscode').lazy_load()
@@ -462,6 +477,22 @@ describe('registry.enable', function()
     assert.are.same({}, helpers.prefixes(registry.get('lua')))
     assert.are.same({}, helpers.prefixes(registry.get('python')))
     assert.are.same({ 'rb_snip' }, helpers.prefixes(registry.get('ruby')))
+  end)
+
+  it('accumulates a scalar include with a later list, not just list with list', function()
+    helpers.use_rtp(helpers.vscode_pack({
+      lua = { a = { prefix = 'lua_snip', body = 'b' } },
+      python = { a = { prefix = 'py_snip', body = 'b' } },
+      ruby = { a = { prefix = 'rb_snip', body = 'b' } },
+    }))
+    local loader = require('zsnip.loaders.from_vscode')
+
+    loader.lazy_load({ include = 'lua' })
+    loader.lazy_load({ include = { 'python' } })
+
+    assert.are.same({ 'lua_snip' }, helpers.prefixes(registry.get('lua')))
+    assert.are.same({ 'py_snip' }, helpers.prefixes(registry.get('python')))
+    assert.are.same({}, helpers.prefixes(registry.get('ruby')))
   end)
 
   it('does not read a nil include as "everything from now on"', function()

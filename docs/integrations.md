@@ -102,9 +102,11 @@ snippet — the description as prose, then the body syntax-highlighted — so th
 menu row stays the trigger and its kind alone. The styling reaches the float
 that `popup` in `'completeopt'` opens (the `preview` split shows the markdown
 raw), and comes back off when selection moves to another source's plain item,
-since one menu reuses the same float. Pass `description_style = 'classic'` to
-keep the description in the menu row instead, visible without selecting, with
-a plain body in the preview.
+since one menu reuses the same float — except onto an item served by
+`vim.lsp.completion`, which core restyles on its own schedule and zsnip leaves
+alone; it comes back off as usual on the next plain item. Pass
+`description_style = 'classic'` to keep the description in the menu row
+instead, visible without selecting, with a plain body in the preview.
 
 Two things are specific to this path:
 

@@ -409,6 +409,19 @@ local function accumulate(current, addition)
   return merged
 end
 
+---Fold a possibly-scalar `include`/`exclude` into what a loader already has.
+---Nil stays nil rather than passing through as_list(): a nil `include` means
+---no filter, but as_list(nil) is `{}`, which would mean "reject everything".
+---@param current string[]|nil
+---@param addition string|string[]|nil
+---@return string[]|nil
+local function merge_filter(current, addition)
+  if addition == nil then
+    return current
+  end
+  return accumulate(current, as_list(addition))
+end
+
 ---Turn on a loader. Called by `zsnip.loaders.from_*`; repeated calls merge,
 ---so a second `lazy_load { paths = ... }` adds to the first rather than
 ---replacing it -- including its `include` and `exclude`, which would
@@ -429,8 +442,8 @@ function M.enable(kind, opts)
     -- hand back nil here; the `or {}` is only to satisfy that its signature
     -- says it might.
     paths = accumulate(as_list(current.paths), paths) or {},
-    include = accumulate(current.include, opts.include),
-    exclude = accumulate(current.exclude, opts.exclude),
+    include = merge_filter(current.include, opts.include),
+    exclude = merge_filter(current.exclude, opts.exclude),
   }
   M.invalidate()
 end

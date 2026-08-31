@@ -32,8 +32,8 @@ over the runtimepath.
 | Option | Type | Meaning |
 | --- | --- | --- |
 | `paths` | `string\|string[]` | Directories to read in addition to the runtimepath |
-| `include` | `string[]` | Only load these languages |
-| `exclude` | `string[]` | Load every language except these |
+| `include` | `string\|string[]` | Only load these languages |
+| `exclude` | `string\|string[]` | Load every language except these |
 
 A snipmate `path` is a directory containing `*.snippets` files, or per-filetype
 directories of them. `_.snippets` — snipmate's convention for "every
@@ -241,11 +241,11 @@ already has, not only one that never gets one.
 | Option | Type | Meaning |
 | --- | --- | --- |
 | `name` | `string` | Client name as it appears in `:checkhealth vim.lsp` (default `'zsnip'`) |
-| `filetypes` | `string[]` | Attach only to these filetypes, or a dotted one's dot-separated components (`javascript` also attaches to `javascript.glimmer`) |
+| `filetypes` | `string\|string[]` | Attach only to these filetypes, or a dotted one's dot-separated components (`javascript` also attaches to `javascript.glimmer`) |
 | `limit` | non-negative integer, or `math.huge` for no cap | Cap on items per response (default: uncapped) |
 | `documentation` | `boolean` | Attach the body as item documentation |
 | `filter` | `fun(snippet): boolean` | Keep only the snippets it returns true for |
-| `trigger_characters` | `string[]` | Characters that make a client ask unprompted (default: none) |
+| `trigger_characters` | `string\|string[]` | Characters that make a client ask unprompted (default: none) |
 | `completion` | `boolean\|table` | Wire each attached buffer up for `vim.lsp.completion`; a table is forwarded to its `enable()` |
 
 `completion` is what makes an accepted item expand — the handler that reads

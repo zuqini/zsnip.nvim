@@ -76,6 +76,17 @@ describe('the in-process server', function()
     assert.are.equal('snips', result.serverInfo.name)
   end)
 
+  -- A bare string reached ipairs() inside vim.lsp.completion's autotrigger
+  -- setup unnormalised and raised; the capability itself is the seam that
+  -- broke, so this asserts it rather than the autotrigger behaviour a
+  -- headless suite has no main loop to exercise.
+  it('normalises a bare string for trigger_characters into the advertised capability', function()
+    local client = start_server({ trigger_characters = '.' })
+    local result = request(client, 'initialize', {})
+
+    assert.are.same({ '.' }, result.capabilities.completionProvider.triggerCharacters)
+  end)
+
   it('answers with the snippets of the requesting buffer', function()
     registry.add('lua', { { prefix = 'req', body = "require '$1'" } })
     registry.add('python', { { prefix = 'imp', body = 'import $1' } })
@@ -365,6 +376,17 @@ describe('lsp.start', function()
 
   it('honours the filetypes gate', function()
     local name = start({ filetypes = { 'lua' } })
+    local wanted, unwanted = named_buffer('lua'), named_buffer('python')
+
+    assert.are.equal(1, attached(wanted, name))
+    assert.are.equal(0, #vim.lsp.get_clients({ bufnr = unwanted, name = name }))
+
+    vim.api.nvim_buf_delete(wanted, { force = true })
+    vim.api.nvim_buf_delete(unwanted, { force = true })
+  end)
+
+  it('accepts a bare string for filetypes, same as a one-element list', function()
+    local name = start({ filetypes = 'lua' })
     local wanted, unwanted = named_buffer('lua'), named_buffer('python')
 
     assert.are.equal(1, attached(wanted, name))

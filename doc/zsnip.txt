@@ -126,8 +126,8 @@ would reject the file -- and every snippet in it -- for that alone.
 
 Options:
     paths     string|string[]  Directories to read besides the 'runtimepath'
-    include   string[]         Only load these languages
-    exclude   string[]         Load every language except these
+    include   string|string[]  Only load these languages
+    exclude   string|string[]  Load every language except these
 
 A snipmate path is a directory containing *.snippets files, or per-filetype
 directories of them. Repeated calls merge rather than replace. `_.snippets` --
@@ -250,7 +250,7 @@ already has, not only one that never gets one.
 Options:
     name                string    Client name, as it appears in `:checkhealth vim.lsp`
                                   (default "zsnip")
-    filetypes           string[]  Attach only to these filetypes, or a dotted
+    filetypes           string|string[]  Attach only to these filetypes, or a dotted
                                   one's dot-separated components ("javascript"
                                   also attaches to "javascript.glimmer")
     limit               number    Cap on items per response: a non-negative
@@ -258,7 +258,7 @@ Options:
                                   (default: uncapped)
     documentation       boolean   Attach the body as item documentation
     filter              fun       Keep only the snippets it returns true for
-    trigger_characters  string[]  Characters that make a client ask unprompted
+    trigger_characters  string|string[]  Characters that make a client ask unprompted
     completion          boolean|table  Wire each attached buffer up for
                                   |vim.lsp.completion|; a table is forwarded
                                   to its enable()
@@ -345,7 +345,10 @@ way (treesitter over the preview float, fences concealed) by the
 |CompleteChanged| handler. The styling reaches the float that `popup` in
 'completeopt' opens -- the `preview` split shows the markdown raw -- and
 comes back off when selection moves to another source's plain item, since one
-menu reuses the same float. The menu row stays the trigger and its kind alone.
+menu reuses the same float -- except while an item served by
+|vim.lsp.completion| is selected, which core restyles on its own schedule and
+zsnip leaves alone; it comes back off as usual on the next plain item. The
+menu row stays the trigger and its kind alone.
 `description_style = 'classic'` keeps the description in the menu row instead,
 visible without selecting, with the preview holding a plain body.
 `documentation = false` empties both wherever they went, and disable() undoes
@@ -373,7 +376,7 @@ still works: `(req` keeps the `(` and expands `req`.
                                                      *zsnip.completion_items()*
 zsnip.completion_items({opts})
 
-Snippets as |lsp.CompletionItem|s, for a hand-rolled completion source. Items
+Snippets as `lsp.CompletionItem`s, for a hand-rolled completion source. Items
 carry `insertTextFormat = Snippet` and a resolved `insertText`. One item per
 trigger.
 

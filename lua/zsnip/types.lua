@@ -19,8 +19,8 @@
 ---Options accepted by both loaders' `load()`/`lazy_load()`.
 ---@class zsnip.LoaderOpts
 ---@field paths? string|string[] Directories to read in addition to the runtimepath
----@field include? string[] Only load these languages
----@field exclude? string[] Load every language except these
+---@field include? string|string[] Only load these languages
+---@field exclude? string|string[] Load every language except these
 
 ---What `registry.enable()` normalizes a `zsnip.LoaderOpts` into and
 ---`registry.loader()` hands back: `paths` is always a normalised list by the
