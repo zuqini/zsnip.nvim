@@ -327,7 +327,12 @@ end
 ---@param body string
 ---@return string
 local function resolve(body)
-  if not body:find('$', 1, true) then
+  -- The union of what the three passes below can match: each needs a `$`,
+  -- optionally `{`, then the variable class. A bare `$` is not enough --
+  -- nearly every body has one in a tabstop, so testing for that alone put
+  -- 90% of a real pack through all three passes where 19% have anything
+  -- variable-shaped, on a path that runs per candidate per keystroke.
+  if not body:find('%${?[A-Z_]') then
     return body
   end
   body = resolve_delimited(body)

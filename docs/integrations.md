@@ -266,3 +266,10 @@ Loose files are only looked for under a `paths` directory you configured.
 Plugins on the runtimepath declare what they contribute in a `package.json`,
 and globbing every plugin directory for stray JSON would turn up a great deal
 that is not a snippet.
+
+Either loader follows symlinks under a `paths` directory: a snippet file that
+is one is read like any other, so a stow or dotfiles setup that routes every
+file through a link is found rather than passed over. A symlinked directory is
+descended into by the snipmate loader alone, whose per-filetype directories sit
+below the one you configured; a VSCode loose file has to sit in the configured
+directory itself, link or not. A link pointing at nothing is skipped.

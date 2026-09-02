@@ -248,14 +248,9 @@ end
 -- Order is load-bearing: it is the order ensure_scanned() below scans in, and
 -- health.lua reports loaders in the same order.
 local FORMATS = {
-  { kind = 'vscode', parser = vscode_parser, scan = scan_vscode },
-  { kind = 'snipmate', parser = snipmate_parser, scan = scan_snipmate },
+  { kind = 'vscode', scan = scan_vscode },
+  { kind = 'snipmate', scan = scan_snipmate },
 }
-
-local by_kind = {}
-for _, format in ipairs(FORMATS) do
-  by_kind[format.kind] = format
-end
 
 ---Every loader kind zsnip knows how to scan, in the order ensure_scanned()
 ---below scans them. `health.lua` iterates this rather than naming the two
@@ -342,16 +337,24 @@ local function parse(source, language)
     return per_language[language]
   end
 
-  -- source.scope carries the pack's own spelling of the language, recorded
-  -- only when it came from this file's own `scope`: a `.code-snippets` file,
-  -- which is one file serving several, then hands back only what is in
-  -- scope for this one. A manifest- or filename-derived source has no
-  -- `scope` and must not filter by it -- see docs/api.md. snipmate has no
-  -- `scope` and ignores the parameter either way.
-  local snippets, extends = by_kind[source.kind].parser.parse(source.path, source.scope)
-
-  if #extends > 0 then
-    state.inherited[language] = vim.list_extend(state.inherited[language] or {}, extends)
+  -- Both arms are named rather than one being an `else`, so a third FORMATS
+  -- entry whose arm nobody wrote leaves `snippets` nil and raises on the next
+  -- line, instead of being parsed as VSCode. Only the two scanners construct
+  -- a source and both pass a literal kind, so that is unreachable until then.
+  local snippets
+  if source.kind == 'snipmate' then
+    local extends
+    snippets, extends = snipmate_parser.parse(source.path)
+    if #extends > 0 then
+      state.inherited[language] = vim.list_extend(state.inherited[language] or {}, extends)
+    end
+  elseif source.kind == 'vscode' then
+    -- source.scope carries the pack's own spelling of the language, recorded
+    -- only when it came from this file's own `scope`: a `.code-snippets`
+    -- file, which is one file serving several, then hands back only what is
+    -- in scope for this one. A manifest- or filename-derived source has no
+    -- `scope` and must not filter by it -- see docs/api.md.
+    snippets = vscode_parser.parse(source.path, source.scope)
   end
 
   local normalized, dropped = normalize(snippets, language)
@@ -387,22 +390,16 @@ local function parents(filetype)
   return list
 end
 
----Every filter accumulates, so a second call adds to the first rather than
----replacing it. Nil stays nil: a call that names no `include` is not a claim
----that every language should now be included.
----@param current string[]?
----@param addition string[]?
----@return string[]?
-local function accumulate(current, addition)
-  if not current or not addition then
-    return current or addition
-  end
+---One list of everything in the given lists, first occurrence winning.
+---@param ... string[]
+---@return string[]
+local function joined(...)
   local merged, seen = {}, {}
-  for _, list in ipairs({ current, addition }) do
-    for _, language in ipairs(list) do
-      if not seen[language] then
-        seen[language] = true
-        merged[#merged + 1] = language
+  for _, list in ipairs({ ... }) do
+    for _, value in ipairs(list) do
+      if not seen[value] then
+        seen[value] = true
+        merged[#merged + 1] = value
       end
     end
   end
@@ -410,8 +407,10 @@ local function accumulate(current, addition)
 end
 
 ---Fold a possibly-scalar `include`/`exclude` into what a loader already has.
----Nil stays nil rather than passing through as_list(): a nil `include` means
----no filter, but as_list(nil) is `{}`, which would mean "reject everything".
+---Every filter accumulates, so a second call adds to the first rather than
+---replacing it. Nil stays nil rather than passing through as_list(): a nil
+---`include` means no filter, but as_list(nil) is `{}`, which would mean
+---"reject everything".
 ---@param current string[]|nil
 ---@param addition string|string[]|nil
 ---@return string[]|nil
@@ -419,7 +418,7 @@ local function merge_filter(current, addition)
   if addition == nil then
     return current
   end
-  return accumulate(current, as_list(addition))
+  return joined(current or {}, as_list(addition))
 end
 
 ---Turn on a loader. Called by `zsnip.loaders.from_*`; repeated calls merge,
@@ -432,16 +431,13 @@ function M.enable(kind, opts)
   opts = opts or {}
   local current = state.loaders[kind] or {}
 
-  -- Normalized before the dedupe accumulate() does: `~/x` and its expansion
+  -- Normalized before the dedupe joined() does: `~/x` and its expansion
   -- are the same path, but not the same string, and :checkhealth would
   -- otherwise list both.
   local paths = vim.tbl_map(vim.fs.normalize, as_list(opts.paths))
 
   state.loaders[kind] = {
-    -- Both sides are always a list, never nil, so accumulate() cannot really
-    -- hand back nil here; the `or {}` is only to satisfy that its signature
-    -- says it might.
-    paths = accumulate(as_list(current.paths), paths) or {},
+    paths = joined(as_list(current.paths), paths),
     include = merge_filter(current.include, opts.include),
     exclude = merge_filter(current.exclude, opts.exclude),
   }

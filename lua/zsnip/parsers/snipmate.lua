@@ -70,10 +70,9 @@ local function clean_description(raw)
 end
 
 ---@param path string
----@param _language? string Unused; snipmate has no per-snippet scope to filter by
 ---@return zsnip.Snippet[] snippets
 ---@return string[] extends Filetypes this file inherits from
-function M.parse(path, _language)
+function M.parse(path)
   local lines = util.read_lines(path)
   if not lines then
     return {}, {}

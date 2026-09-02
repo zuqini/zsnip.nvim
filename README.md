@@ -288,7 +288,9 @@ default is used in its place. So is a known key whose value it cannot use
 Both loaders also take `paths`, `include` and `exclude`; a VSCode `paths` entry
 may be a package with a `package.json` or a directory of loose snippet files,
 so `~/.config/Code/User/snippets` works as-is — comments and trailing commas
-included, which VSCode's own files are full of. A snipmate `_.snippets` —
+included, which VSCode's own files are full of. Symlinks under a configured
+path are followed, so a stow or dotfiles setup is found rather than passed
+over. A snipmate `_.snippets` —
 honza/vim-snippets ships one — is filed under `global_filetype` rather than a
 filetype literally named `_`, and its `${VISUAL}`/`$VISUAL` — snipmate's own
 name for the selected text — is rewritten to `TM_SELECTED_TEXT`. A VSCode

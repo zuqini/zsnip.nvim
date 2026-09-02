@@ -51,6 +51,21 @@ describe('completion.unmatched', function()
     check('foo.', 'console.log', 'foo.', false)
   end)
 
+  -- The fuzzy test is matchfuzzy()'s, not a byte-wise subsequence test: it
+  -- splits its pattern on whitespace and matches each word, and folds case
+  -- over Unicode. A pure-Lua pre-filter once sat in front of the call for
+  -- speed and got both wrong, so a head came back doubled or missing; these
+  -- two pin what any future shortcut has to preserve.
+  it('still fuzzy-matches a run whose whitespace matchfuzzy splits on', function()
+    check('\ti', 'if', '', false)
+    check(' _', 'a_b.c', '', false)
+  end)
+
+  it('still fuzzy-matches a trigger whose case matchfuzzy folds over Unicode', function()
+    check('x.ü', 'X.Überschrift', '', false)
+    check('aü', '.Ülog', 'a', false)
+  end)
+
   -- init.match() refuses to fire a keyword trigger inside a word; unmatched()
   -- has to refuse the same split, or 'xr' offers 'req' as if '(x' had typed it.
   it('will not split a keyword trigger out of the middle of a word', function()

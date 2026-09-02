@@ -66,6 +66,13 @@ harmless — filtering on them drops most of what the pack serves.
 Loose files are only looked for under a configured `path`, never on the
 runtimepath — a plugin there declares what it contributes in a `package.json`.
 
+Either loader follows symlinks under a configured `path`: a snippet file that
+is one is read like any other, so a stow or dotfiles setup that routes every
+file through a link is found rather than passed over. A symlinked directory is
+descended into by the snipmate loader alone, whose per-filetype directories sit
+below the configured one; a VSCode loose file has to sit in the configured
+directory itself, link or not. A link pointing at nothing is skipped.
+
 Comments and trailing commas are accepted in any of these. VSCode generates
 every user snippet file with a `//` header block, and strict JSON would reject
 the file — and every snippet in it — for that alone.

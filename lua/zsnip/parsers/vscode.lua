@@ -99,7 +99,6 @@ end
 ---@param path string
 ---@param language? string Drop snippets whose `scope` excludes it; nil keeps all
 ---@return zsnip.Snippet[] snippets
----@return string[] extends Always empty; VSCode packs have no inheritance directive
 function M.parse(path, language)
   -- Carried alongside the snippet, not inside it, so two definitions sharing
   -- a prefix can break the tie below without the tie-break leaking into what
@@ -148,7 +147,7 @@ function M.parse(path, language)
   for i, entry in ipairs(entries) do
     snippets[i] = entry.snippet
   end
-  return snippets, {}
+  return snippets
 end
 
 return M

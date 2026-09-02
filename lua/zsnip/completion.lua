@@ -64,7 +64,6 @@ local function trigger_start(run, trigger)
       if trigger:sub(1, #typed):lower() == typed:lower() then
         return start, true
       end
-      -- A Vimscript call, so only at a legal start the cheap test rejected.
       if #vim.fn.matchfuzzy({ trigger }, typed) > 0 then
         return start, false
       end

@@ -77,13 +77,6 @@ describe('vscode.parse', function()
     end, snippets))
   end)
 
-  -- Same contract as snipmate.parse(): (path, language?) -> snippets, extends.
-  -- VSCode packs have no inheritance directive of their own.
-  it('returns an empty extends list', function()
-    local _, extends = vscode.parse(snippet_file({ a = { prefix = 'a', body = 'b' } }))
-    assert.are.same({}, extends)
-  end)
-
   it('drops a scope that excludes the language asked about', function()
     local path = snippet_file({ a = { scope = 'lua', prefix = 'a', body = 'b' } })
     assert.are.same({}, vscode.parse(path, 'python'))

@@ -495,6 +495,19 @@ describe('registry.enable', function()
     assert.are.same({}, helpers.prefixes(registry.get('ruby')))
   end)
 
+  it('copies the include it was handed rather than keeping the caller\'s table', function()
+    helpers.use_rtp(helpers.vscode_pack({
+      lua = { a = { prefix = 'lua_snip', body = 'b' } },
+      python = { a = { prefix = 'py_snip', body = 'b' } },
+    }))
+    local mine = { 'lua' }
+    require('zsnip.loaders.from_vscode').lazy_load({ include = mine })
+    mine[1] = 'python'
+
+    assert.are.same({ 'lua_snip' }, helpers.prefixes(registry.get('lua')))
+    assert.are.same({}, helpers.prefixes(registry.get('python')))
+  end)
+
   it('does not read a nil include as "everything from now on"', function()
     helpers.use_rtp(helpers.vscode_pack({
       lua = { a = { prefix = 'lua_snip', body = 'b' } },
